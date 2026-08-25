@@ -126,6 +126,35 @@ function addMsg(cls, html) {
   return el;
 }
 
+// Agent answers are markdown; showing them as raw text meant every code block
+// arrived as ``` fences. Rendered here rather than with a library because the
+// panel has a strict CSP and this needs to stay dependency-free.
+//
+// SECURITY: the input is agent output, which may quote a web page. Everything is
+// HTML-escaped FIRST, then a fixed set of inline patterns is re-introduced — so
+// no path exists from page text to live markup.
+function renderMarkdown(src) {
+  const blocks = [];
+  let text = esc(src || "");
+  // fenced code first, stashed so its contents are never touched by inline rules
+  text = text.replace(/```([a-zA-Z0-9]*)\n([\s\S]*?)```/g, (_m, lang, code) => {
+    blocks.push(`<pre><code data-lang="${esc(lang)}">${code.replace(/\n$/, "")}</code></pre>`);
+    return `\u0000B${blocks.length - 1}\u0000`;
+  });
+  text = text
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|\n)#{1,6}\s*([^\n]+)/g, "$1<h3>$2</h3>");
+  // bullet runs → one list
+  text = text.replace(/(?:^|\n)((?:[-*]\s+[^\n]+\n?)+)/g, (_m, run) => {
+    const items = run.trim().split("\n").map((l) => `<li>${l.replace(/^[-*]\s+/, "")}</li>`).join("");
+    return `<ul>${items}</ul>`;
+  });
+  const html = text.split(/\n{2,}/).map((para) =>
+    /^\s*(<h3>|<ul>|\u0000B\d+\u0000)/.test(para) ? para : `<p>${para}</p>`).join("");
+  return html.replace(/\u0000B(\d+)\u0000/g, (_m, i) => blocks[Number(i)]);
+}
+
 function agentBubble() {
   const el = addMsg("agent", '<span class="who"></span><span class="body"></span>');
   el.querySelector(".who").textContent = state.agents.default || "agent";
@@ -214,7 +243,7 @@ async function ask(prompt) {
         try { ev = JSON.parse(line); } catch { continue; }
         if (ev.type === "text") {
           text += ev.text;
-          body.textContent = text;
+          body.innerHTML = renderMarkdown(text);
         } else if (ev.type === "tool") {
           const t = document.createElement("div");
           t.className = "tool";
@@ -222,7 +251,7 @@ async function ask(prompt) {
           bubble.insertBefore(t, spin);
         } else if (ev.type === "done") {
           if (ev.session_id) state.session = ev.session_id;
-          if (!text && ev.text) { text = ev.text; body.textContent = text; }
+          if (!text && ev.text) { text = ev.text; body.innerHTML = renderMarkdown(text); }
         } else if (ev.type === "stderr") {
           console.warn("[agent]", ev.text);
         } else if (ev.type === "end" && ev.error) {
@@ -443,6 +472,7 @@ function openForm(id, preset) {
   $("s-kind").value = cap?.kind || preset?.kind || "extract";
   $("s-autorun").checked = !!cap?.autorun;
   $("s-code").value = preset?.code || "";
+  fillParams(cap?.params || {});
   const m = cap?.match || [];
   $("s-scope").value = !cap ? "site" : m.includes("*") ? "all" : "custom";
   $("s-match").value = m.filter((x) => x !== "*").join(", ");
@@ -458,6 +488,62 @@ $("new-script").addEventListener("click", () => openForm(null));
 $("s-cancel").addEventListener("click", closeForm);
 $("s-scope").addEventListener("change", () => ($("s-match").hidden = $("s-scope").value !== "custom"));
 
+// ---- parameter editor ----
+// Without this the panel could only ever save `params: {}`, so a script authored
+// here could never take arguments and the bridge's validation had nothing to
+// check. Editing the declaration is what makes a saved script reusable.
+const PARAM_TYPES = ["string", "number", "boolean", "object", "array"];
+
+function paramRow(name = "", spec = {}) {
+  const row = document.createElement("div");
+  row.className = "prow-edit";
+  row.innerHTML = `
+    <input class="pname" placeholder="参数名" value="${esc(name)}">
+    <select class="ptype">${PARAM_TYPES.map((t) =>
+      `<option ${t === (spec.type || "string") ? "selected" : ""}>${t}</option>`).join("")}</select>
+    <label class="req"><input type="checkbox" class="preq" ${spec.required ? "checked" : ""}>必填</label>
+    <button class="icon-btn pdel" type="button" title="删除">✕</button>
+    <input class="pdesc" placeholder="说明（agent 靠它知道该传什么）＋默认值写在下一格"
+           value="${esc(spec.description || "")}">
+    <input class="pdef" placeholder="默认值（留空=无默认）"
+           value="${spec.default === undefined ? "" : esc(typeof spec.default === "string" ? spec.default : JSON.stringify(spec.default))}">`;
+  row.querySelector(".pdef").style.gridColumn = "1 / -1";
+  row.querySelector(".pdel").addEventListener("click", () => row.remove());
+  return row;
+}
+
+function fillParams(params) {
+  const box = $("s-params");
+  box.innerHTML = "";
+  for (const [name, spec] of Object.entries(params || {})) box.appendChild(paramRow(name, spec));
+}
+
+function collectParams() {
+  const out = {};
+  for (const row of $("s-params").querySelectorAll(".prow-edit")) {
+    const name = row.querySelector(".pname").value.trim();
+    if (!name) continue;
+    const type = row.querySelector(".ptype").value;
+    const spec = { type, description: row.querySelector(".pdesc").value.trim() };
+    if (row.querySelector(".preq").checked) spec.required = true;
+    const raw = row.querySelector(".pdef").value.trim();
+    if (raw !== "") {
+      // a default must match the declared type, or the bridge rejects every call
+      if (type === "number") spec.default = Number(raw);
+      else if (type === "boolean") spec.default = /^(true|1|yes)$/i.test(raw);
+      else if (type === "object" || type === "array") {
+        try { spec.default = JSON.parse(raw); }
+        catch { throw new Error(`参数 ${name} 的默认值不是合法 JSON`); }
+      } else spec.default = raw;
+      if (spec.required) delete spec.required;   // lint refuses both at once
+    }
+    out[name] = spec;
+  }
+  return out;
+}
+
+$("s-addparam").addEventListener("click", () => $("s-params").appendChild(paramRow()));
+
 function closeForm() {
   $("script-form").hidden = true;
   $("script-list").hidden = false;
@@ -471,6 +557,8 @@ $("s-save").addEventListener("click", async () => {
   if (!id) return showErr("需要一个 id（脚本的文件名）");
   if (!code.trim()) return showErr("代码不能为空");
   const host = (() => { try { return new URL(state.tab?.url || "").hostname.replace(/^www\./, ""); } catch { return ""; } })();
+  let params;
+  try { params = collectParams(); } catch (e) { return showErr(e.message); }
   const scope = $("s-scope").value;
   const match = scope === "all" ? ["*"]
     : scope === "custom" ? ($("s-match").value.split(",").map((x) => x.trim()).filter(Boolean) || ["*"])
@@ -481,7 +569,7 @@ $("s-save").addEventListener("click", async () => {
     description: $("s-desc").value.trim(),
     kind: $("s-kind").value,
     match: match.length ? match : ["*"],
-    params: (state.caps.find((c) => c.id === id) || {}).params || {},
+    params,
     autorun: $("s-autorun").checked,
   };
   const source = "/* @web-bridge-capability\n" + JSON.stringify(meta, null, 2) + "\n*/\n" + code;

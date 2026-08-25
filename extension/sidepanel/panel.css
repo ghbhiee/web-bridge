@@ -99,6 +99,24 @@ select.mini { max-width: 130px; }
 .field > span { font-size: 11px; color: var(--muted); }
 .field input, .field textarea, .field select { border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; background: var(--bg); }
 .field textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 11.5px; }
+.field > span em.sub { font-style: normal; color: var(--muted); }
+.params-edit { display: flex; flex-direction: column; gap: 5px; margin-bottom: 5px; }
+.prow-edit { display: grid; grid-template-columns: 1fr 74px auto 22px; gap: 4px; align-items: center; }
+.prow-edit input, .prow-edit select { border: 1px solid var(--line); border-radius: 5px; padding: 3px 5px; background: var(--bg); font-size: 11px; min-width: 0; }
+.prow-edit .pdesc { grid-column: 1 / -1; }
+.prow-edit .req { display: flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+
+/* chat markdown */
+.msg .body { white-space: normal; }
+.msg .body p { margin: 0 0 6px; white-space: pre-wrap; }
+.msg .body p:last-child { margin-bottom: 0; }
+.msg .body code { background: var(--chip); border-radius: 4px; padding: 1px 4px; font-family: ui-monospace, monospace; font-size: 11px; }
+.msg .body pre { background: var(--chip); border-radius: 6px; padding: 7px 8px; overflow-x: auto; margin: 6px 0; }
+.msg .body pre code { background: none; padding: 0; font-size: 10.5px; line-height: 1.5; }
+.msg .body h1, .msg .body h2, .msg .body h3 { font-size: 12.5px; margin: 8px 0 4px; }
+.msg .body ul { margin: 4px 0; padding-left: 18px; }
+.msg .body li { margin: 2px 0; }
+
 .check { display: flex; gap: 7px; align-items: flex-start; font-size: 12px; }
 .check em { display: block; color: var(--muted); font-style: normal; font-size: 10.5px; }
 .actions { display: flex; gap: 7px; justify-content: flex-end; }

@@ -88,6 +88,12 @@
         </select>
         <input id="s-match" type="text" placeholder="例如 x.com 或 youtube.com/watch，多个用逗号" hidden />
       </div>
+      <div class="field">
+        <span>参数<em class="sub">（脚本里用 <code>args.名字</code> 取；bridge 会按这里的声明校验）</em></span>
+        <div id="s-params" class="params-edit"></div>
+        <button id="s-addparam" class="mini ghost" type="button">＋ 添加参数</button>
+      </div>
+
       <label class="check"><input id="s-autorun" type="checkbox" />
         <span>页面加载时自动运行<em>（只对改页面的脚本有意义；关掉后需刷新页面还原）</em></span></label>
       <label class="field"><span>JavaScript（函数体：<code>args</code> 可用，可 <code>await</code>，<code>return</code> 结果）</span>
