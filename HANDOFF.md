@@ -248,6 +248,11 @@ payload 验证过：变成可见文本，不执行。
 （不跳转、不用再填一次表单）。agent **不许自己保存**——用户通常还要接着改几轮，
 存不存、什么时候存由他决定。只有用户明确说「保存」时 agent 才用 `web_save_page_script`。
 
+**同一次对话里再存 = 更新那一条**（按钮会变成「更新「脚本名」」），因为"改几轮再存"
+就是这个功能的正常用法；每次新建会攒出一堆几乎一样的脚本。想要副本用「另存为新脚本」，
+清空对话后指针重置。更新时**只送 code**：名称、匹配范围、autorun 开关是用户在面板里设的，
+`user_scripts.save()` 对没送的字段保留原值——否则对话里存一次就把用户开的自动运行关掉了。
+
 **`web_save_page_script` 是补的洞**：拆分两个库之后，MCP 里只有 `web_save_capability`
 （agent 自己的能力库），**没有任何工具能写进用户脚本库**——agent 想存也存不了，
 所以那次「美化页面」既没注入也没保存。
@@ -350,7 +355,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 52 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 54 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

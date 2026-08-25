@@ -30,6 +30,7 @@ const state = {
   userFilterSite: true,
   editingUser: null,
   composing: false,   // an IME candidate window is open
+  savedScript: null,  // {id, name} saved from THIS conversation — later saves update it
   pendingRun: null,   // a run that was still going when the panel closed
 };
 
@@ -81,7 +82,7 @@ async function persist() {
   try {
     await chrome.storage.local.set({
       [STORE_KEY]: { turns, session: state.session, agent: $("agent-pick").value,
-                     run: state.run },
+                     run: state.run, savedScript: state.savedScript },
     });
   } catch (_) {}
 }
@@ -106,6 +107,7 @@ async function restore() {
   $("messages").scrollTop = $("messages").scrollHeight;
   if (saved.agent) state.wantAgent = saved.agent;
   if (saved.run) state.pendingRun = saved.run;   // picked up after boot
+  state.savedScript = saved.savedScript || null;
 }
 
 // --------------------------------------------------------------------------- //
@@ -221,43 +223,69 @@ function scriptName(code, bubble) {
 function offerSave(bubble, text) {
   const m = /```(?:js|javascript)\n([\s\S]*?)```/.exec(text || "");
   if (!m || m[1].trim().length < 20) return;
+  const code = m[1].trim();
   const box = document.createElement("div");
   box.className = "save-code";
-  box.innerHTML = '<button class="mini primary">保存到我的脚本库</button>' +
-                  '<button class="mini ghost">在本页运行</button>';
-  const [saveBtn, runBtn] = box.querySelectorAll("button");
+
+  // Refining a script over several rounds is the normal way this is used, so the
+  // default has to be "update the one I saved", not "make another copy". Saving
+  // used to always create, leaving a pile of near-identical scripts behind.
+  const saved = state.savedScript;
+  box.innerHTML =
+    `<button class="mini primary">${saved ? "更新「" + esc(saved.name) + "」" : "保存到我的脚本库"}</button>` +
+    `<button class="mini ghost">在本页运行</button>` +
+    (saved ? '<button class="mini ghost asnew">另存为新脚本</button>' : "");
+  const saveBtn = box.querySelector(".mini.primary");
+  const runBtn = box.querySelectorAll("button")[1];
+  const asNewBtn = box.querySelector(".asnew");
+
+  async function store(asNew) {
+    const target = !asNew && state.savedScript ? state.savedScript.id : "new";
+    // On an update only the code travels: name, matches and the autorun switch
+    // belong to whatever the user set in the panel and must survive.
+    const body = target === "new"
+      ? { name: scriptName(code, bubble), code, matches: [hostOf(state.tab?.url) || "*"],
+          autorun: false, note: "对话里让 agent 写的" }
+      : { code };
+    const data = await api(`/user-script/${encodeURIComponent(target)}`, {
+      method: "PUT", body: JSON.stringify(body),
+    });
+    state.savedScript = { id: data.script.id, name: data.script.name };
+    persist();
+    if (document.querySelector(".tab.active")?.dataset.tab === "page") loadUserScripts();
+    return data.script;
+  }
+
   saveBtn.addEventListener("click", async () => {
-    // One click saves. It used to open the 页面 form and make the user press
-    // save a second time; the agent, meanwhile, saved on its own before the user
-    // had decided anything. Now nothing is stored until this button is pressed,
-    // and pressing it is the whole action — so a user can keep refining the
-    // request in chat and only keep the version they like.
     saveBtn.disabled = true;
     try {
-      const data = await api("/user-script/new", {
-        method: "PUT",
-        body: JSON.stringify({
-          name: scriptName(m[1], bubble),
-          code: m[1].trim(),
-          matches: [hostOf(state.tab?.url) || "*"],
-          autorun: false,
-          note: "对话里让 agent 写的",
-        }),
-      });
-      saveBtn.textContent = "已保存 ✓";
-      toast(`已存到「页面」→ ${data.script.name}`, 2200);
-      if (document.querySelector(".tab.active")?.dataset.tab === "page") loadUserScripts();
+      const rec = await store(false);
+      saveBtn.textContent = state.savedScript ? "已更新 ✓" : "已保存 ✓";
+      toast(`已存到「页面」→ ${rec.name}`, 2200);
     } catch (e) {
       saveBtn.disabled = false;
       addMsg("err", "保存失败：" + esc(e.message));
     }
   });
+
+  asNewBtn?.addEventListener("click", async () => {
+    asNewBtn.disabled = true;
+    try {
+      const rec = await store(true);
+      asNewBtn.textContent = "已另存 ✓";
+      toast(`已新建 → ${rec.name}`, 2200);
+    } catch (e) {
+      asNewBtn.disabled = false;
+      addMsg("err", "保存失败：" + esc(e.message));
+    }
+  });
+
   runBtn.addEventListener("click", async () => {
     runBtn.disabled = true;
     try {
       const data = await api("/exec", {
         method: "POST",
-        body: JSON.stringify({ code: m[1].trim(), url: state.tab?.url || "", timeout_ms: 60000 }),
+        body: JSON.stringify({ code, url: state.tab?.url || "", timeout_ms: 60000 }),
       });
       document.querySelector('.tab[data-tab="page"]').click();
       showUserResult("对话里的脚本", data.result);
@@ -270,8 +298,6 @@ function offerSave(bubble, text) {
   bubble.appendChild(box);
 }
 
-// Reading the run's NDJSON is shared by a fresh ask and by reattaching to one
-// already in flight, so both paths render identically.
 async function consumeStream(resp, bubble, spin) {
   const body = bubble.querySelector(".body");
   const reader = resp.body.getReader();
@@ -429,6 +455,7 @@ $("stop").addEventListener("click", async () => {
 $("clear-chat").addEventListener("click", () => {
   $("messages").innerHTML = "";
   state.session = null;
+  state.savedScript = null;                 // a new conversation saves a new script
   chrome.storage.local.remove(STORE_KEY).catch(() => {});
   toast("对话已清空（下一条重新开一个会话）");
 });

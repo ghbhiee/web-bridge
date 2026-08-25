@@ -38,7 +38,12 @@ async function api(path, opts = {}) {
   if (path.startsWith("/user-script/")) {
     if ((opts.method || "GET") === "POST" && path.endsWith("/run"))
       return { ok: true, script: "隐藏侧边栏", result: { hidden: true } };
-    return { ok: true, script: { id: "u_demo", name: "x", code: "return 1", matches: ["*"], autorun: false } };
+    const body = opts.body ? JSON.parse(opts.body) : {};
+    const isNew = path.includes("/new");
+    const id = isNew ? "u_new" + (window.__savedCount = (window.__savedCount || 0) + 1) : path.split("/")[2];
+    return { ok: true, script: { id, name: body.name || "已保存的脚本",
+                                 code: body.code, matches: body.matches || ["*"],
+                                 autorun: body.autorun ?? false } };
   }
   if (path.startsWith("/agent/run/")) {
     // a run that is still going, so reattach has something to follow

@@ -106,21 +106,34 @@ def for_url(url: str = "") -> list[dict]:
 
 
 def save(script: dict) -> dict:
-    """Create or update. Returns the stored record."""
+    """Create or update. Returns the stored record.
+
+    Fields left out of an update keep their stored value. This matters because
+    updates arrive from more than one place: the chat's save button sends only
+    the new code, and rebuilding the record from scratch there would silently
+    switch off an autorun the user had turned on in the panel.
+    """
     if not (script.get("code") or "").strip():
         raise ValueError("代码不能为空")
     scripts = _load()
     sid = script.get("id") or ("u_" + uuid.uuid4().hex[:8])
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     existing = next((s for s in scripts if s["id"] == sid), None)
+    prev = existing or {}
+
+    def keep(field, value, default):
+        if value is None:
+            return prev.get(field, default)
+        return value
+
     record = {
         "id": sid,
-        "name": (script.get("name") or "").strip() or "未命名脚本",
+        "name": (keep("name", script.get("name"), "") or "").strip() or prev.get("name") or "未命名脚本",
         "code": script["code"],
-        "matches": script.get("matches") or ["*"],
-        "autorun": bool(script.get("autorun")),
-        "note": (script.get("note") or "").strip(),
-        "created": (existing or {}).get("created", now),
+        "matches": keep("matches", script.get("matches"), None) or prev.get("matches") or ["*"],
+        "autorun": bool(keep("autorun", script.get("autorun"), False)),
+        "note": (keep("note", script.get("note"), "") or "").strip(),
+        "created": prev.get("created", now),
         "updated": now,
     }
     if existing:

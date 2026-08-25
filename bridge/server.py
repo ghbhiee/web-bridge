@@ -688,11 +688,13 @@ class AutorunReq(BaseModel):
 
 
 class UserScriptReq(BaseModel):
-    name: str = ""
     code: str
-    matches: list[str] = ["*"]
-    autorun: bool = False
-    note: str = ""
+    # None means "leave whatever is stored" — an update from the chat sends only
+    # the code, and must not reset the switches the user set in the panel
+    name: Optional[str] = None
+    matches: Optional[list[str]] = None
+    autorun: Optional[bool] = None
+    note: Optional[str] = None
 
 
 @app.get("/user-scripts", dependencies=[Depends(require_token)])

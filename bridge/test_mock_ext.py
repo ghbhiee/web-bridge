@@ -374,6 +374,23 @@ async def main():
     listed = any(s["id"] == uid for s in data.get("scripts", []))
     results.append(("user_scripts.separate_from_capabilities", listed and not leaked))
 
+    # refining a script over several chat rounds must update the same record,
+    # not leave a pile of near-identical copies — and an update that carries only
+    # the new code must not reset the name, scope or the autorun the user set.
+    await asyncio.to_thread(http, "POST", f"/user-script/{uid}/autorun", {"autorun": True})
+    code, data = await asyncio.to_thread(
+        http, "PUT", f"/user-script/{uid}", {"code": "return 2;"})
+    rec = data.get("script") or {}
+    results.append(("user_scripts.partial_update_keeps_fields",
+                    code == 200 and rec.get("autorun") is True
+                    and rec.get("name") == "__wb-test-user"
+                    and rec.get("matches") == ["example.com"]
+                    and "return 2;" in rec.get("code", "")))
+
+    code, data = await asyncio.to_thread(http, "GET", "/user-scripts")
+    same_id = [x for x in data.get("scripts", []) if x["id"] == uid]
+    results.append(("user_scripts.update_does_not_duplicate", len(same_id) == 1))
+
     await asyncio.to_thread(http, "DELETE", f"/user-script/{uid}")
 
     # 28. the chat-to-library loop the panel exists for: an agent writes a page
