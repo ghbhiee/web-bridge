@@ -240,6 +240,32 @@ TOOLS = [
             "required": ["capability", "source"]},
     },
     {
+        "name": "web_save_page_script",
+        "description": ("Save JS into the USER's page-script library (the panel's 页面 tab), where "
+                        "they can re-run, edit and auto-run it. This is where a script the user "
+                        "asked you to write belongs — web_save_capability is for your own reusable "
+                        "abilities, not for the user's page tweaks. Set autorun for scripts that "
+                        "restyle a page and should run on every load. Pass the existing id to "
+                        "update one."),
+        "inputSchema": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "short name the user will see"},
+            "code": {"type": "string", "description": "function body; may await; may return JSON"},
+            "matches": {"type": "array", "items": {"type": "string"},
+                        "description": "where it applies: [\"example.com\"], [\"example.com/list\"] or [\"*\"]"},
+            "autorun": {"type": "boolean", "default": False,
+                        "description": "run it automatically on page load (restyle scripts)"},
+            "note": {"type": "string", "description": "one line on what it does"},
+            "id": {"type": "string", "description": "omit to create; pass to update"}},
+            "required": ["name", "code"]},
+    },
+    {
+        "name": "web_page_scripts",
+        "description": ("List the user's own page scripts, optionally for one url. Check here "
+                        "before writing a new one — the user may already have it."),
+        "inputSchema": {"type": "object", "properties": {
+            "url": {"type": "string"}}},
+    },
+    {
         "name": "web_journal",
         "description": ("**Look here before writing JS.** Searches what has already been run on a "
                         "site — one-off scripts from web_exec and capability calls — most-used "
@@ -340,6 +366,20 @@ def call_tool(name, args):
         if code != 200:
             return {"ok": False, "error": "capability not saved", "detail": data.get("detail")}
         return data
+    if name == "web_save_page_script":
+        _ensure_server()
+        sid = args.get("id") or "new"
+        body = {"name": args.get("name", ""), "code": args["code"],
+                "matches": args.get("matches") or ["*"],
+                "autorun": bool(args.get("autorun")), "note": args.get("note", "")}
+        code, data = _http("PUT", f"/user-script/{urllib.parse.quote(sid)}", body)
+        if code != 200:
+            return {"ok": False, "error": data.get("detail")}
+        return data
+    if name == "web_page_scripts":
+        _ensure_server()
+        qs = "?url=" + urllib.parse.quote(args["url"]) if args.get("url") else ""
+        return _http("GET", "/user-scripts" + qs)[1]
     if name == "web_journal":
         _ensure_server()
         qs = [f"limit={int(args.get('limit', 10))}"]

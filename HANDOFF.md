@@ -45,7 +45,7 @@ mcp_server.py            cli.py
 bridge/
   server.py        FastAPI：/exec /capabilities /capability/{id} /adapter /sites /tabs /open /close /reload
   cli.py           wb 命令（自动拉起 server）
-  mcp_server.py    stdio MCP，零依赖，14 个工具
+  mcp_server.py    stdio MCP，零依赖，16 个工具
   capabilities.py  能力注册表：扫目录、解析元数据头、URL 匹配、参数校验、元数据体检
   journal.py       exec 日志 + 归一化签名计数 + 跑满 3 次自动沉淀成能力
   agents.py        本地 agent 运行器（claude -p / codex exec / dsh），探测 + 流式事件
@@ -238,6 +238,20 @@ payload 验证过：变成可见文本，不执行。
 **侧栏不实现任何逻辑**：每个动作都走 CLI/MCP 用的同一批路由（`/agent/ask`、`/capability/{id}`、
 `/exec`、`/journal`），所以参数校验、敏感站点黑名单、标签页解析、exec 日志只有一份实现。
 
+### 对话开发脚本 → 存进用户脚本库（这是「对话」标签存在的意义）
+
+用户在对话里说「美化这个页面」，agent 必须**一次做完三步**，简报里是硬性要求：
+1. `web_exec` 把脚本**真的跑上去**——只探查不动手，用户眼里什么都没发生
+2. 把 JS **贴在回答里**（```js 块），用户要看得见写了什么
+3. `web_save_page_script` **存进用户的脚本库**（「页面」标签），样式类带 `autorun: true`
+
+**`web_save_page_script` 是补的洞**：拆分两个库之后，MCP 里只有 `web_save_capability`
+（agent 自己的能力库），**没有任何工具能写进用户脚本库**——agent 想存也存不了，
+所以那次「美化页面」既没注入也没保存。
+
+真机验证过整条链：说一句 → 页面立刻变（背景/字号/style 标签都在）→ 代码在回答里 →
+「页面」标签里出现这个脚本 → 刷新自动生效 → 关掉自动运行后刷新完全还原 → 手动运行按钮可用。
+
 ### 对话必须告诉 agent 它在哪
 
 `agents.panel_brief()`：面板每次提问都带上 `{url, title}`，拼成一段简报注入
@@ -255,6 +269,10 @@ payload 验证过：变成可见文本，不执行。
 
 - 三个 CLI 的流式格式不同：claude 是 stream-json、codex 是 JSONL、dsh 是纯文本，
   `parse_line()` 把它们归一成同一串事件（text / tool / done / end）
+- **子进程流的行长上限必须调大**：asyncio 默认 64KB/行，而 claude 的 stream-json
+  一个事件就是一行，一个大工具结果就会让整个 run 以
+  `Separator is not found, and chunk exceed the limit` 挂掉，**已经做完的活全丢**。
+  现在 16MB，且真超了也只跳过那一行、不中断 run。
 - `/agent/ask` 返回 **NDJSON 流**（不是等跑完再返回，这类任务动辄几分钟）；
   run 存在服务端，侧栏**关掉再打开会自动接回正在跑的任务**（存 run id → 重开时
   `/agent/run/{id}`，没跑完就 `?follow=true` 继续跟）。真机验证过：起一个真 claude 任务、
@@ -325,7 +343,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 48 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 51 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

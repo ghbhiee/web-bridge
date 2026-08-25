@@ -698,7 +698,9 @@ function wirePageTab() {
 
   $("u-ask-agent").addEventListener("click", () => {
     document.querySelector('.tab[data-tab="chat"]').click();
-    $("input").value = "帮我写一段在这个页面上跑的 JS：";
+    $("input").value = "帮我给这个页面写一段 JS，做到：（在这里写你想要的效果，" +
+      "例如：把正文加宽、隐藏顶部提示、把列表抓成 JSON）。写好后直接在页面上跑给我看，" +
+      "并存到我的脚本库。";
     $("input").focus();
   });
 

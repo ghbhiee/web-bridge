@@ -376,6 +376,26 @@ async def main():
 
     await asyncio.to_thread(http, "DELETE", f"/user-script/{uid}")
 
+    # 28. the chat-to-library loop the panel exists for: an agent writes a page
+    #     script and saves it into the USER's library. There was no tool for
+    #     that at all — only web_save_capability, which is the agent's own
+    #     library — so an agent asked to "beautify this page" could probe and
+    #     inject but never hand anything back.
+    import mcp_server as _mcp
+    tool_names = [t["name"] for t in _mcp.TOOLS]
+    results.append(("mcp.can_save_page_scripts",
+                    "web_save_page_script" in tool_names and "web_page_scripts" in tool_names))
+
+    # the brief must tell the agent to apply + show + save, not just to read
+    import agents as _agents
+    brief = _agents.panel_brief({"url": "https://example.com/", "title": "t"})
+    results.append(("agents.brief_demands_delivery",
+                    all(k in brief for k in ("web_exec", "web_save_page_script", "```js"))))
+
+    # a single oversized line must not kill a run (claude's stream-json puts a
+    # whole event on one line; the 64KB default limit ended runs mid-flight)
+    results.append(("agents.stream_limit_raised", _agents.STREAM_LIMIT >= 8 * 1024 * 1024))
+
     # --- WS security tests last: they connect their own sockets, which take over
     # --- the hub's single extension slot, so no mock round-trip survives them.
     # 8. a web-page Origin must be rejected on the extension socket

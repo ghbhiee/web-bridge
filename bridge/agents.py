@@ -65,6 +65,10 @@ KNOWN = {
 
 DEFAULT_CWD = str(Path.home() / "cc")
 
+# One stream-json event is one line, and a line carrying a page's HTML or a big
+# tool result is routinely megabytes.
+STREAM_LIMIT = 16 * 1024 * 1024
+
 
 # --------------------------------------------------------------------------- #
 # the briefing every panel-launched agent gets
@@ -92,6 +96,21 @@ PANEL_BRIEF = """你正在 web-bridge 的浏览器侧栏里被调用，不是在
 3. 顺序是：先用 web-bridge 把数据取出来，再做后续处理（存档、总结、发送、写文件…）。
 4. 动作要收敛。优先一两次工具调用拿到数据就往下走，不要长时间翻本地文件和 skill 源码——
    用户在侧栏里等着看结果。
+
+**用户要你改这个页面时（美化、去广告、加按钮、抽数据…），一次做完这三步：**
+  a. 用 `web_exec` **把脚本真的跑上去**，让用户立刻在页面上看到效果。只探查不动手 =
+     用户眼里什么都没发生。探查一两次就够，别反复看 DOM。
+  b. 把这段 JS **贴在回答里**（```js 代码块），用户要能看见你写了什么。
+  c. 用 `web_save_page_script` **存进用户自己的脚本库**（面板「页面」标签），
+     这样刷新后还能再用。改样式的脚本存的时候带上 `autorun: true`，
+     `matches` 用当前站点（例如 ["example.com"]）。
+     注意：`web_save_capability` 是你自己的能力库，**用户要的脚本不要存到那里**。
+
+写页面脚本的约定：函数体写法，可以 `await`，`return` 的值会显示给用户；
+样式类改动要能重复执行不叠加（先判断元素在不在、加个标记位）。
+
+如果用户的要求不够具体（例如只说「帮我写段 JS」），**先看页面再给一个具体方案并直接做**，
+不要停下来只问一句"你想让它做什么"——用户已经把页面摆在你面前了。
 """
 
 
@@ -309,9 +328,14 @@ async def start(agent: str, prompt: str, cwd: str = "", session_id: str = "",
 
     run.emit({"type": "start", "agent": name, "cwd": workdir,
               "argv": argv[:-1] + ["<prompt>"]})
+    # asyncio's StreamReader defaults to a 64KB line limit, and claude's
+    # stream-json puts one whole event on one line — a large tool result blew
+    # past it and killed the run with "Separator is not found, and chunk exceed
+    # the limit", losing everything the agent had already done.
     proc = await asyncio.create_subprocess_exec(
         *argv, cwd=workdir, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL)
+        stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
+        limit=STREAM_LIMIT)
     run.proc = proc
     asyncio.create_task(_pump(run, proc, r.get("format") or "text"))
     return run
@@ -320,7 +344,16 @@ async def start(agent: str, prompt: str, cwd: str = "", session_id: str = "",
 async def _pump(run: Run, proc, fmt: str) -> None:
     async def read_out():
         assert proc.stdout
-        async for raw in proc.stdout:
+        while True:
+            try:
+                raw = await proc.stdout.readline()
+            except (asyncio.LimitOverrunError, ValueError) as e:
+                # even past the raised limit, drop the offending line rather than
+                # abandoning a run the user is watching
+                run.emit({"type": "stderr", "text": f"(跳过一行超长输出: {e})"})
+                continue
+            if not raw:
+                break
             for ev in parse_line(fmt, raw.decode("utf-8", "replace")):
                 run.emit(ev)
 
