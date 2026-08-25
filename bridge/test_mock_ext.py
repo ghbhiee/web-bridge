@@ -266,6 +266,52 @@ async def main():
     results.append(("hub.same_target_reports_busy", same_target_busy))
     results.append(("hub.health_reports_inflight", reports_inflight))
 
+    # 24. the side panel's surfaces: agent roster, autorun registration list, and
+    #     the autorun toggle. These are what the panel calls on every open, so a
+    #     break here is a blank panel rather than a visible error.
+    code, data = await asyncio.to_thread(http, "GET", "/agents")
+    roster_ok = code == 200 and isinstance(data.get("runners"), dict)
+    results.append(("agents.roster_listed", roster_ok))
+
+    # an unknown agent must be refused by name, not spawn something arbitrary
+    code, data = await asyncio.to_thread(
+        http, "POST", "/agent/ask", {"prompt": "hi", "agent": "definitely-not-installed"})
+    results.append(("agents.unknown_agent_refused",
+                    code == 400 and "definitely-not-installed" in (data.get("detail") or "")))
+
+    code, data = await asyncio.to_thread(http, "POST", "/agent/ask", {"prompt": "   "})
+    results.append(("agents.empty_prompt_refused", code == 400))
+
+    # 25. autorun round trip through the capability library
+    import json as _json
+    meta = {"id": "__wb-test-autorun", "title": "t", "description": "test only",
+            "kind": "restyle", "match": ["example.com"], "params": {}, "autorun": False}
+    src = "/* @web-bridge-capability\n" + _json.dumps(meta) + "\n*/\nreturn 1;"
+    code, _ = await asyncio.to_thread(
+        http, "PUT", "/capability/__wb-test-autorun", {"source": src})
+    saved = code == 200
+
+    code, data = await asyncio.to_thread(
+        http, "POST", "/capability/__wb-test-autorun/autorun", {"autorun": True})
+    turned_on = code == 200 and data.get("capability", {}).get("autorun") is True
+
+    code, data = await asyncio.to_thread(http, "GET", "/capabilities/autorun")
+    listed = code == 200 and any(s["id"] == "__wb-test-autorun" for s in data.get("scripts", []))
+    patterns = next((s["matches"] for s in data.get("scripts", [])
+                     if s["id"] == "__wb-test-autorun"), [])
+    results.append(("autorun.save_toggle_list", saved and turned_on and listed))
+    # a bare host must become a real match pattern, or userScripts.register
+    # rejects the whole batch and every autorun script silently stops working
+    results.append(("autorun.host_becomes_match_pattern", patterns == ["*://*.example.com/*"]))
+
+    # extraction scripts have nothing to auto-run, and saying so beats a
+    # script that fires on every page load and returns into the void
+    code, _ = await asyncio.to_thread(
+        http, "POST", "/capability/extract-article/autorun", {"autorun": True})
+    results.append(("autorun.refused_for_extract", code == 404))
+
+    await asyncio.to_thread(http, "DELETE", "/capability/__wb-test-autorun")
+
     # --- WS security tests last: they connect their own sockets, which take over
     # --- the hub's single extension slot, so no mock round-trip survives them.
     # 8. a web-page Origin must be rejected on the extension socket

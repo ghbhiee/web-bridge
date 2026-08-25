@@ -56,6 +56,10 @@ def _parse(path: Path) -> Optional[dict]:
     meta.setdefault("kind", "other")
     meta.setdefault("match", ["*"])
     meta.setdefault("params", {})
+    # `autorun` is page-beauty's "enhance" switch: the extension registers these
+    # as userScripts so they fire on page load. Only meaningful for scripts that
+    # change a page (restyle/automate); extraction runs on demand.
+    meta.setdefault("autorun", False)
     meta["file"] = str(path)
     meta["body"] = text[m.end():].strip()
     return meta
@@ -85,6 +89,45 @@ def matches(meta: dict, url: str) -> bool:
         if "://" not in p and "*" not in p and p in url:
             return True
     return False
+
+
+def autorun_for_registration() -> list[dict]:
+    """Scripts the extension should register to run automatically on page load.
+
+    Returned with code, because the extension registers them with
+    chrome.userScripts.register — unlike on-demand runs, there is no round trip
+    to the bridge at page-load time.
+    """
+    out = []
+    for c in all_caps():
+        if not c.get("autorun") or not c.get("body"):
+            continue
+        out.append({"id": c["id"], "title": c.get("title") or c["id"],
+                    "matches": _match_patterns(c), "code": c["body"],
+                    "kind": c.get("kind")})
+    return out
+
+
+def _match_patterns(meta: dict) -> list[str]:
+    """Turn our loose `match` entries into real Chrome match patterns.
+
+    Capability `match` accepts "*", a bare host, or a glob; userScripts.register
+    only accepts genuine match patterns, and one bad pattern rejects the whole
+    batch — so anything unrecognisable becomes a host-wide pattern rather than
+    being passed through to fail.
+    """
+    pats = []
+    for p in meta.get("match") or ["*"]:
+        if p == "*":
+            pats.append("*://*/*")
+        elif p.startswith(("http://", "https://", "*://")):
+            pats.append(p)
+        elif "/" in p:
+            host, _, rest = p.partition("/")
+            pats.append(f"*://*.{host}/{rest}*" if "*" not in host else f"*://{host}/{rest}*")
+        else:
+            pats.append(f"*://*.{p}/*")
+    return pats or ["*://*/*"]
 
 
 def for_url(url: str = "") -> list[dict]:
@@ -138,6 +181,10 @@ def lint(meta: dict) -> list[str]:
                 problems.append(f"params.{name} 缺少 description")
             if "default" in spec and spec.get("required"):
                 problems.append(f"params.{name} 同时有 default 和 required，二选一")
+    if not isinstance(meta.get("autorun", False), bool):
+        problems.append("autorun 必须是 true/false（页面加载时自动运行，只对改页面的脚本有意义）")
+    if meta.get("autorun") and meta.get("kind") == "extract":
+        problems.append("extract 类能力不该 autorun：抽取是按需运行的，自动跑没有意义")
     if not str(meta.get("body", "")).strip():
         problems.append("元数据头之后没有代码——文件体就是要注入页面的函数体")
     return problems
@@ -167,6 +214,40 @@ def save(cap_id: str, source: str, overwrite: bool = True) -> dict:
             path.write_text(previous, encoding="utf-8")   # roll back to the working version
         raise ValueError("能力元数据有问题（未写入）：\n  - " + "\n  - ".join(problems))
     return public(meta)
+
+
+def set_autorun(cap_id: str, on: bool) -> dict:
+    """Rewrite just the autorun flag in a capability's metadata header.
+
+    Edits the header in place rather than regenerating the file, so a
+    hand-written capability keeps its formatting and comments.
+    """
+    meta = get(cap_id)
+    if not meta:
+        raise KeyError(f"未知能力 '{cap_id}'")
+    if meta.get("kind") == "extract" and on:
+        raise ValueError("extract 类能力不能 autorun：抽取是按需运行的")
+    path = Path(meta["file"])
+    text = path.read_text(encoding="utf-8")
+    m = HEADER_RE.search(text)
+    if not m:
+        raise ValueError("能力文件没有元数据头")
+    block = m.group(1)
+    flag = "true" if on else "false"
+    # Surgical edit, not a regenerated header: re-serialising the JSON would
+    # reflow a hand-written file (every capability here is hand-formatted, with
+    # one param per line) and make the diff of a one-flag toggle unreadable.
+    swapped, n = re.subn(r'("autorun"\s*:\s*)(true|false)', lambda mm: mm.group(1) + flag, block)
+    if not n:
+        # no autorun key yet — add it just before the closing brace, matching the
+        # indentation the file already uses
+        idx = swapped.rstrip().rfind("}")
+        head, tail = swapped[:idx].rstrip(), swapped[idx:]
+        comma = "" if head.endswith(("{", ",")) else ","
+        indent = "  " if "\n" in head else " "
+        swapped = f'{head}{comma}\n{indent}"autorun": {flag}\n{tail}'
+    path.write_text(text[:m.start(1)] + swapped + text[m.end(1):], encoding="utf-8")
+    return public(get(cap_id) or meta)
 
 
 def delete(cap_id: str) -> bool:

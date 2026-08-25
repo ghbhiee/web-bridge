@@ -34,13 +34,14 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 import uvicorn
 
 import config
 import capabilities
 import journal
+import agents
 import results
 
 VERSION = "0.2.0"
@@ -217,6 +218,22 @@ class Hub:
             self.inflight.pop(key, None)
             lock.release()
 
+    def notify(self, action: str, payload: Optional[dict] = None) -> None:
+        """Tell the extension something changed, without waiting for a reply.
+
+        Used after a capability edit so autorun registration refreshes right
+        away. Deliberately not a command: nobody is waiting on a result, and it
+        must never queue behind a page-driving command.
+        """
+        ws = self.ws
+        if ws is None:
+            return
+        msg = json.dumps({"type": "notify", "action": action, "payload": payload or {}})
+        try:
+            asyncio.get_running_loop().create_task(ws.send_text(msg))
+        except Exception:  # noqa: BLE001
+            pass
+
     async def _send(self, action: str, payload: dict, timeout: float) -> dict:
         """Ship one command to the extension and wait for its result by id."""
         ws = self.ws
@@ -353,6 +370,7 @@ async def health():
         "sites": list(config.SITES.keys()),
         "inflight": [{"target": k, **v, "seconds": round(time.time() - v["started"], 1)}
                      for k, v in hub.inflight.items()],
+        "version": BUILD_AT_START.get("version"),
         "build": build,
         # spelled out so `curl /health | grep stale` is enough to catch the
         # "daemon is older than the fix" trap without reading the whole object
@@ -649,6 +667,27 @@ async def run_capability(cap_id: str, req: RunCapReq):
     return JSONResponse({"ok": True, "capability": cap_id, **data, "journal": note})
 
 
+@app.get("/capabilities/autorun", dependencies=[Depends(require_token)])
+async def autorun_list():
+    """What the extension should register to run on page load."""
+    return {"ok": True, "scripts": capabilities.autorun_for_registration()}
+
+
+class AutorunReq(BaseModel):
+    autorun: bool
+
+
+@app.post("/capability/{cap_id}/autorun", dependencies=[Depends(require_token)])
+async def set_autorun(cap_id: str, req: AutorunReq):
+    """Flip a script's auto-run switch (page-beauty's enhance toggle)."""
+    try:
+        meta = capabilities.set_autorun(cap_id, req.autorun)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    hub.notify("sync-autorun")
+    return {"ok": True, "capability": meta}
+
+
 class SaveCapReq(BaseModel):
     source: str
     overwrite: bool = True
@@ -661,13 +700,87 @@ async def save_capability(cap_id: str, req: SaveCapReq):
         meta = capabilities.save(cap_id, req.source, req.overwrite)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    hub.notify("sync-autorun")
     return {"ok": True, "capability": meta}
 
 
 @app.delete("/capability/{cap_id}", dependencies=[Depends(require_token)])
 async def delete_capability(cap_id: str):
-    return {"ok": capabilities.delete(cap_id)}
+    gone = capabilities.delete(cap_id)
+    if gone:
+        hub.notify("sync-autorun")
+    return {"ok": gone}
 
+
+
+# --------------------------------------------------------------------------- #
+# local agents — the side panel's chat tab drives claude / codex / dsh
+# --------------------------------------------------------------------------- #
+@app.get("/agents", dependencies=[Depends(require_token)])
+async def list_agents():
+    """Which agent CLIs this machine has, and how they will be invoked."""
+    return {"ok": True, **agents.roster()}
+
+
+class DetectReq(BaseModel):
+    cwd: Optional[str] = None
+    full_access: bool = True
+
+
+@app.post("/agents/detect", dependencies=[Depends(require_token)])
+async def detect_agents(req: DetectReq):
+    """Re-probe PATH and rewrite the agents block in config.json."""
+    block = agents.detect(req.cwd, req.full_access)
+    agents.save(block)
+    return {"ok": True, **agents.roster()}
+
+
+class AskReq(BaseModel):
+    prompt: str
+    agent: Optional[str] = None
+    cwd: Optional[str] = None
+    session_id: Optional[str] = None       # continue a previous conversation
+
+
+@app.post("/agent/ask", dependencies=[Depends(require_token)])
+async def agent_ask(req: AskReq):
+    """Start an agent and stream its events back as NDJSON.
+
+    Streaming rather than request/response because these runs take minutes; the
+    run is also kept server-side, so a panel that reloads mid-answer can reattach
+    with GET /agent/run/{id} instead of losing the work.
+    """
+    if not (req.prompt or "").strip():
+        raise HTTPException(status_code=400, detail="prompt 不能为空")
+    try:
+        run = await agents.start(req.agent or "", req.prompt,
+                                 req.cwd or "", req.session_id or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return StreamingResponse(agents.stream(run), media_type="application/x-ndjson",
+                             headers={"X-Run-Id": run.id})
+
+
+@app.get("/agent/run/{run_id}", dependencies=[Depends(require_token)])
+async def agent_run(run_id: str, follow: bool = False, from_index: int = 0):
+    """Reattach to a run: replay its events, optionally keep following."""
+    run = agents.RUNS.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"没有这个 run：{run_id}")
+    if follow:
+        return StreamingResponse(agents.stream(run, from_index),
+                                 media_type="application/x-ndjson")
+    return {"ok": True, **run.summary(), "events": run.events[from_index:]}
+
+
+@app.get("/agent/runs", dependencies=[Depends(require_token)])
+async def agent_runs():
+    return {"ok": True, "runs": [r.summary() for r in agents.RUNS.values()]}
+
+
+@app.post("/agent/run/{run_id}/stop", dependencies=[Depends(require_token)])
+async def agent_stop(run_id: str):
+    return {"ok": agents.stop(run_id)}
 
 
 @app.get("/journal", dependencies=[Depends(require_token)])

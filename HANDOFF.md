@@ -48,14 +48,15 @@ bridge/
   mcp_server.py    stdio MCP，零依赖，12 个工具
   capabilities.py  能力注册表：扫目录、解析元数据头、URL 匹配、参数校验、元数据体检
   journal.py       exec 日志 + 归一化签名计数 + 跑满 3 次自动沉淀成能力
+  agents.py        本地 agent 运行器（claude -p / codex exec / dsh），探测 + 流式事件
   run_tests.sh     用一次性 server（独立端口+临时 state）跑回归，不干扰实时服务
   config.py        读 ~/.config/web-bridge/config.json（token/port/sites/blocklist）
   register_mcp.py  把 MCP 注册进 4 个 agent（幂等）
   mock_ext.py / test_mock_ext.py   无浏览器时的假扩展 + 回归测试（19 项）
-  popup_harness.py 把扩展弹窗渲染成普通网页以便测试（见「测试与验证」）
+  panel_harness.py 把扩展侧栏渲染成普通网页以便测试（见「测试与验证」）
   service.py       launchd 服务安装/卸载/重启/状态/日志（wb service 就是它）
 capabilities/      能力库（写一个文件 = 新增能力，无需重载扩展）；auto/ 是自动沉淀出来的
-extension/         MV3 扩展；popup/ 可浏览能力并直接运行（填参数 → 运行 → 复制/下载结果）
+extension/         MV3 扩展；sidepanel/ 是右侧驻留侧栏（对话 / 脚本库 / 页面 三个标签）
 ```
 
 ## 常用命令
@@ -213,6 +214,43 @@ MCP 工具名：`web_capabilities`（带 `capability` 参数则返回单个能�
 - **刻意没有收窄 `host_permissions`**：收窄会砍掉「任意站点通用能力」这一核心价值，
   黑名单是更合适的取舍。改主意的话改 config 即可。
 
+## 侧栏（点扩展图标打开，右侧驻留）
+
+`extension/sidepanel/`，三个标签：
+
+| 标签 | 干什么 |
+|---|---|
+| **对话** | 调用**本机的 agent**（claude / codex / dsh）。`＋页面内容`把当前页正文读进上下文；agent 回答里的 ```js 代码块会给出「存成脚本 / 在本页运行」两个按钮——对话生成的脚本由此进入能力库 |
+| **脚本库** | 原 page-beauty 的功能并入这里。列当前站点/全部能力，填参数运行、编辑、删除、**自动运行开关**（页面加载时注入） |
+| **页面** | bridge/扩展/服务状态、快捷动作（提取正文/探查/表格/阅读模式）、**这个站以前跑过什么**（点一条即可拿它的代码去存成脚本）、标签页列表 |
+
+**侧栏不实现任何逻辑**：每个动作都走 CLI/MCP 用的同一批路由（`/agent/ask`、`/capability/{id}`、
+`/exec`、`/journal`），所以参数校验、敏感站点黑名单、标签页解析、exec 日志只有一份实现。
+
+### 本地 agent（对话标签的后端）
+
+`bridge/agents.py`。安装服务时自动探测 claude / codex / dsh 并写进 config.json 的 `agents`
+块（`wb agents` 查看、`wb agents --detect` 重新探测、`--cwd` 指定工作目录）。
+
+- 三个 CLI 的流式格式不同：claude 是 stream-json、codex 是 JSONL、dsh 是纯文本，
+  `parse_line()` 把它们归一成同一串事件（text / tool / done / end）
+- `/agent/ask` 返回 **NDJSON 流**（不是等跑完再返回，这类任务动辄几分钟）；
+  run 存在服务端，侧栏刷新后可以用 `/agent/run/{id}?follow=1` 重新接上
+- **权限**：探测时默认加上跳过确认的参数（claude `--dangerously-skip-permissions`、
+  codex `--dangerously-bypass-approvals-and-sandbox`）——非交互跑不能停在确认提示上。
+  这等于**网页里的一句话可以驱动你机器上的 agent 全权干活**，是用户明确选择的取舍；
+  想收紧就 `wb service install --no-full-access` 或改 config.json 的 args。
+
+### 自动运行脚本（原 page-beauty 的 enhance 开关）
+
+能力元数据新增 `autorun: true`，SW 启动时从 `/capabilities/autorun` 拉取并用
+`chrome.userScripts.register` 注册，页面加载时自动跑。改动会通过 WS 的 `notify`
+立刻让 SW 重新注册（不用等下次启动）。`extract` 类能力禁止 autorun——抽取是按需的。
+
+坑：`match` 里写的是宽松写法（`*`、裸域名），但 userScripts.register 只认真正的
+match pattern，**一个坏 pattern 会让整批注册失败**，所以 `_match_patterns()` 统一转换，
+注册也做了逐个回退。
+
 ## 自进化：exec 日志 → 自动沉淀成能力
 
 **问题**：能力库能不能长大，以前完全取决于 agent 记不记得调 `save_capability`——没有任何
@@ -259,14 +297,14 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 27 项，独立端口 + 临时 state，不碰实时服务
-python3 bridge/popup_harness.py        # 生成 .harness/harness.html
+./bridge/run_tests.sh                  # 40 项，独立端口 + 临时 state，不碰实时服务
+python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 
 **别直接跑 `test_mock_ext.py`**：它会连上 8790 抢真扩展的槽位，两边互踢。要单独跑就自己
 设好 `WEB_BRIDGE_PORT` / `WEB_BRIDGE_STATE` 指向一次性实例。
 
-**弹窗为什么要 harness**：Chrome 不允许任何扩展注入别的扩展的页面，所以 popup 是唯一
+**侧栏为什么要 harness**：Chrome 不允许任何扩展注入别的扩展的页面，所以 popup 是唯一
 不能被 web-bridge 自己驱动验证的部分。`popup_harness.py` 用**真实的** popup.html/popup.js，
 只桩掉三处扩展专属接缝（config.js 导入、chrome.* 、api()），于是渲染 / 参数表单 /
 readForm 都能在普通浏览器里跑，运行结果回显参数、调用记录挂在 `window.__calls` 上。

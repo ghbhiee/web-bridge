@@ -366,3 +366,33 @@ server 跑测试。回归 23 → **27 项**（新增：只读命令不排队、�
 
 回归 27 → **34 项**（新增：/health 报告 build、结果可事后领取、同 id 不重跑、未知 id 404
 指向 chatgpt-last、失败也记录、/results 列表、mock 连接带标识）。
+
+## M14 侧栏重构 + 本地 agent 对话 + page-beauty 并入（2026-08-25）
+
+把 `~/Downloads/page-beauty`（独立的 MV3 扩展：保存 AI 写的 JS、按站点注入、
+enhance 自动运行 / extract 手动出 JSON）并进来，同时把扩展从 popup 改成**右侧驻留侧栏**。
+
+**没有照搬 page-beauty 的实现**，只并入它的两个概念：
+- 「enhance = 页面加载时自动运行」→ 能力元数据的 `autorun` 字段
+- 「extract = return JSON」→ 本来就是 `kind: extract` 的语义
+
+它原来的脚本存 `chrome.storage.local`、自带一套 match 匹配和悬浮球；这些都没要——
+脚本统一存服务端 `capabilities/`，复用已有的元数据、参数校验、lint、自动沉淀。
+好处是**对话里生成的脚本、CLI 存的脚本、自动沉淀的脚本、侧栏存的脚本是同一批东西**。
+
+**侧栏三标签**（`extension/sidepanel/`）：对话 / 脚本库 / 页面。侧栏零业务逻辑，
+全部走 CLI 和 MCP 用的同一批 HTTP 路由。
+
+**本地 agent 对话**（`bridge/agents.py` + `/agents` `/agent/ask` `/agent/run/{id}`）：
+安装服务时探测 claude/codex/dsh 写进 config；三种流式格式归一成一串事件；
+`/agent/ask` 走 NDJSON 流，run 存服务端可重新接上。对话里 agent 回答的 js 代码块
+带「存成脚本 / 在本页运行」，这是**对话 → 能力库**的入口。
+
+**修的两个真 bug**：
+- `[hidden]` 被 CSS 的 `display:flex` 盖过——侧栏里每个隐藏块（上下文条、编辑表单、
+  结果卡）都渲染成了空盒子。加一条 `[hidden]{display:none!important}` 一次性根治。
+- `re.sub` 会展开替换串里的转义：harness 生成器里 JS 字符串的 `\n` 变成了真换行，
+  生成的脚本直接语法错误。改用 lambda 替换。
+
+回归 34 → **40 项**（新增：agent 名册、未知 agent 拒绝、空 prompt 拒绝、autorun 存/开/列、
+裸域名转 match pattern、extract 拒绝 autorun）。

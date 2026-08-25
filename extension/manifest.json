@@ -1,14 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Web Bridge",
-  "version": "0.1.0",
-  "description": "Drive logged-in browser pages from local agents: run JS in a page's MAIN world or call site adapters, over an authenticated local bridge. MV3, generic, site-agnostic.",
+  "version": "0.3.0",
+  "description": "Drive logged-in browser pages from local agents: a side panel with agent chat, a script library, and page tools, over an authenticated local bridge.",
   "permissions": [
     "tabs",
     "scripting",
     "storage",
     "alarms",
-    "userScripts"
+    "userScripts",
+    "sidePanel",
+    "activeTab"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -43,7 +45,6 @@
   ],
   "action": {
     "default_title": "Web Bridge",
-    "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -54,5 +55,9 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "minimum_chrome_version": "138",
+  "side_panel": {
+    "default_path": "sidepanel/panel.html"
   }
 }

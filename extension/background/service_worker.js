@@ -45,6 +45,10 @@ function connect() {
   ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === "notify" && msg.action === "sync-autorun") {
+      syncAutorun().then((r) => console.log("[web-bridge] autorun resync", r));
+      return;
+    }
     if (msg.type === "command") {
       handleCommand(msg).catch((e) =>
         send({ type: "result", id: msg.id, ok: false, error: String((e && e.message) || e) })
@@ -598,5 +602,85 @@ try {
   chrome.tabs.onUpdated.addListener((tabId, info) => { if (info.status === "loading") injected.delete(tabId); });
 } catch (_) {}
 
+// --------------------------------------------------------------------------- //
+// side panel + autorun scripts
+// --------------------------------------------------------------------------- //
+// Clicking the toolbar icon opens the panel. setPanelBehavior is the supported
+// way to do this — an onClicked listener never fires once a side panel is
+// declared, which looks exactly like a broken extension.
+try {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((e) => console.warn("[web-bridge] setPanelBehavior:", e));
+} catch (_) {}
+
+// Scripts marked `autorun` in the capability library run on page load. They live
+// on the bridge (one source of truth for every surface), so the SW pulls them
+// and registers them with chrome.userScripts — at page-load time there is no
+// round trip to ask.
+const AUTORUN_PREFIX = "wb-auto-";
+
+async function bridgeGet(path) {
+  const base = BRIDGE_WS.replace(/^ws:/, "http:").replace(/\/ws\/ext$/, "");
+  const r = await fetch(base + path, { headers: { Authorization: "Bearer " + BRIDGE_TOKEN } });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+async function syncAutorun() {
+  if (!chrome.userScripts) return { ok: false, error: "userScripts 不可用（需在扩展详情页开启「允许用户脚本」）" };
+  let scripts = [];
+  try {
+    scripts = (await bridgeGet("/capabilities/autorun")).scripts || [];
+  } catch (e) {
+    return { ok: false, error: "读不到 bridge：" + ((e && e.message) || e) };
+  }
+  try {
+    const existing = await chrome.userScripts.getScripts();
+    const ours = existing.filter((s) => s.id.startsWith(AUTORUN_PREFIX)).map((s) => s.id);
+    if (ours.length) await chrome.userScripts.unregister({ ids: ours });
+  } catch (_) {}
+  if (!scripts.length) return { ok: true, registered: 0 };
+
+  // Wrapped the same way exec is: the body is a function body, so `return` and
+  // top-level await work exactly as they do everywhere else in this project.
+  const regs = scripts.map((s) => ({
+    id: AUTORUN_PREFIX + s.id,
+    matches: s.matches,
+    js: [{ code: `(async (args) => {\n${s.code}\n})({}).catch(e => console.warn("[web-bridge] ${s.id}:", e));` }],
+    world: "MAIN",
+    runAt: "document_idle",
+  }));
+  try {
+    await chrome.userScripts.register(regs);
+    return { ok: true, registered: regs.length };
+  } catch (e) {
+    // Registration is all-or-nothing: one bad match pattern would silently take
+    // down every other script, so fall back to one at a time.
+    let n = 0;
+    const failed = [];
+    for (const reg of regs) {
+      try { await chrome.userScripts.register([reg]); n++; }
+      catch (e2) { failed.push(reg.id + ": " + ((e2 && e2.message) || e2)); }
+    }
+    return { ok: true, registered: n, failed };
+  }
+}
+
+// The panel asks for things the bridge cannot do for it: which tab is active,
+// and re-registering autorun scripts after an edit.
+chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (!msg || msg.type !== "WB_PANEL") return false;
+  if (msg.action === "sync-autorun") {
+    syncAutorun().then(reply);
+    return true;                       // async reply
+  }
+  if (msg.action === "ping") {
+    reply({ ok: true, connected: !!(ws && ws.readyState === WebSocket.OPEN) });
+    return false;
+  }
+  return false;
+});
+
 connect();
+syncAutorun().then((r) => console.log("[web-bridge] autorun sync", r));
 console.log("[web-bridge] service worker loaded; connecting to", BRIDGE_WS);

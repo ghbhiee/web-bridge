@@ -30,8 +30,9 @@ bridge/
   results.py       结果缓存：request_id → 结果，可事后领取（内存 + 落盘）
   mock_ext.py      无浏览器时的假扩展，用于测试（拒绝连生产端口）
   test_mock_ext.py headless 测试（19 项）
-  popup_harness.py 把扩展弹窗渲染成普通网页以便测试（扩展页面无法被注入）
+  panel_harness.py 把扩展侧栏渲染成普通网页以便测试（扩展页面无法被注入）
   service.py       launchd 常驻服务的安装/卸载/重启/状态/日志
+  agents.py        本地 agent 运行器（claude/codex/dsh）：探测、启动、流式事件
 capabilities/      能力库（写一个 .js 文件 = 新增一个能力）
 extension/         MV3 扩展
   manifest.json    relay(ISOLATED) + page(MAIN) 双内容脚本 + SW
@@ -96,6 +97,24 @@ web-bridge reload      # 让扩展从磁盘重载
 
 `wb service restart` 在有命令正在跑时会拒绝执行（`--force` 才打断）——重启本身就是
 「结果全丢」最常见的原因。
+
+### 侧栏
+
+点扩展图标打开右侧驻留侧栏，三个标签：
+
+- **对话** —— 调用本机的 agent（claude / codex / dsh）。可一键把当前页面正文读进上下文；
+  agent 给出的 js 代码块可直接「在本页运行」或「存成脚本」
+- **脚本库** —— 管理能力库：按站点/全部筛选、填参数运行、编辑、删除、**自动运行开关**
+- **页面** —— 服务状态、快捷动作、这个站以前跑过什么、标签页列表
+
+侧栏本身不含业务逻辑，所有动作走和 CLI/MCP 相同的 HTTP 路由。
+
+### 本地 agent
+
+安装服务时会探测 `claude` / `codex` / `dsh` 并写进配置（`web-bridge agents` 查看，
+`--detect` 重新探测）。⚠️ 默认给它们加上跳过确认的参数，好让非交互模式不卡在确认提示上——
+这意味着**侧栏对话里的一句话可以让 agent 在你机器上全权执行**。想收紧：
+`web-bridge service install --no-full-access`。
 
 ### 自进化
 

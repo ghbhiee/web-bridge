@@ -255,6 +255,32 @@ def cmd_log(args):
     return 0
 
 
+def cmd_agents(args):
+    """Show / re-detect the local agent CLIs the side panel's chat can call."""
+    if not _need_server(args):
+        return 2
+    if args.detect:
+        code, data = _http("POST", "/agents/detect",
+                           {"cwd": args.cwd, "full_access": not args.no_full_access})
+    else:
+        code, data = _http("GET", "/agents")
+    if code != 200:
+        _emit(data, args.json); return 1
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2)); return 0
+    runners = data.get("runners") or {}
+    if not runners:
+        print("没有探测到本地 agent（claude / codex / dsh）。装好之后跑 wb agents --detect")
+        return 1
+    for name, r in runners.items():
+        mark = "✅" if r.get("available") else "❌"
+        star = "  ←默认" if name == data.get("default") else ""
+        print(f"{mark} {name}{star}  {r.get('label','')}")
+        print(f"     {r.get('path')} {' '.join(r.get('args') or [])}")
+        print(f"     工作目录 {r.get('cwd')}")
+    return 0
+
+
 def cmd_service(args):
     return {
         "install": service.cmd_install, "uninstall": service.cmd_uninstall,
@@ -610,6 +636,12 @@ def build_parser():
     lg2.add_argument("--code-lines", type=int, default=20, help="每条打印多少行代码")
     lg2.add_argument("--all", action="store_true", help="连失败过的也列出来")
     lg2.set_defaults(func=cmd_log)
+
+    ag = sub.add_parser("agents", help="侧栏对话可调用的本地 agent（claude/codex/dsh）")
+    ag.add_argument("--detect", action="store_true", help="重新探测并写入配置")
+    ag.add_argument("--cwd", help="agent 的默认工作目录")
+    ag.add_argument("--no-full-access", action="store_true", help="不加跳过确认的参数")
+    ag.set_defaults(func=cmd_agents)
 
     sv = sub.add_parser("service", help="装成开机自启的后台服务（launchd）")
     sv.add_argument("action", choices=["install", "uninstall", "restart", "status", "logs"])

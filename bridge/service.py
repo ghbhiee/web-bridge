@@ -30,6 +30,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import config  # noqa: E402
+import agents  # noqa: E402
 
 LABEL = "com.web-bridge.server"
 PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
@@ -180,6 +181,18 @@ def cmd_install(args) -> int:
         return 2
     PLIST.parent.mkdir(parents=True, exist_ok=True)
     LOG.parent.mkdir(parents=True, exist_ok=True)
+
+    # Probe for local agent CLIs now and write them into config.json, so the side
+    # panel's chat tab has a roster without anyone hand-writing argv.
+    block = agents.detect(getattr(args, "agent_cwd", None) or None,
+                          not getattr(args, "no_full_access", False))
+    agents.save(block)
+    if block["runners"]:
+        names = ", ".join(block["runners"])
+        cwd = block["runners"][block["default"]]["cwd"]
+        print(f"  本地 agent：{names}（默认 {block['default']}，工作目录 {cwd}）")
+    else:
+        print("  本地 agent：未探测到 claude / codex / dsh —— 侧栏对话标签会显示不可用")
     body = plist_body()
     PLIST.write_bytes(plistlib.dumps(body))
     print(f"写入 {PLIST}")
@@ -289,6 +302,10 @@ def main() -> int:
         sp = sub.add_parser(name)
         sp.add_argument("--force", action="store_true",
                         help="即使有命令在跑也照做（会打断它们，结果可能丢）")
+        if name == "install":
+            sp.add_argument("--agent-cwd", help="侧栏 agent 的默认工作目录（默认 ~/cc）")
+            sp.add_argument("--no-full-access", action="store_true",
+                            help="不给 agent 加跳过确认的参数（默认加，见 README 安全说明）")
         sp.set_defaults(func=fn)
     sub.add_parser("status").set_defaults(func=cmd_status)
     lg = sub.add_parser("logs"); lg.add_argument("-n", "--lines", type=int, default=40)

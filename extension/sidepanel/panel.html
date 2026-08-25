@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Web Bridge</title>
+<link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <header class="bar">
+    <span class="dot" id="dot" title="bridge 状态"></span>
+    <div class="site">
+      <strong id="host">—</strong>
+      <span id="url" class="url"></span>
+    </div>
+    <button id="refresh" class="icon-btn" title="刷新">⟳</button>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="chat" role="tab">对话</button>
+    <button class="tab" data-tab="scripts" role="tab">脚本库</button>
+    <button class="tab" data-tab="page" role="tab">页面</button>
+  </nav>
+
+  <!-- ================= 对话 ================= -->
+  <section class="pane active" id="pane-chat">
+    <div class="chat-tools">
+      <select id="agent-pick" class="mini" title="用哪个本地 agent"></select>
+      <button id="ctx-btn" class="mini ghost" title="把当前页面正文读进对话上下文">＋页面内容</button>
+      <button id="clear-chat" class="mini ghost" title="清空对话">清空</button>
+    </div>
+    <div id="ctx-chip" class="ctx-chip" hidden>
+      <span id="ctx-label"></span><button id="ctx-drop" class="icon-btn" title="移除">✕</button>
+    </div>
+
+    <div id="messages" class="messages">
+      <div class="hello">
+        <p><b>这里调用你本机的 agent</b>（claude / codex / dsh），它能用 web-bridge 的
+           skills 和 MCP 操作当前页面。</p>
+        <p class="hint">试试：</p>
+        <div class="suggest">
+          <button class="chip-btn">把这个页面的正文提取成 Markdown</button>
+          <button class="chip-btn">写个脚本把这页的列表抓成 JSON</button>
+          <button class="chip-btn">把这个页面重排成适合阅读的样式</button>
+          <button class="chip-btn">把当前页面存到 Evernote</button>
+        </div>
+      </div>
+    </div>
+
+    <form id="composer" class="composer">
+      <textarea id="input" rows="2" placeholder="想让 agent 做什么？(Enter 发送 / Shift+Enter 换行)"></textarea>
+      <button id="send" class="primary" type="submit">发送</button>
+      <button id="stop" class="danger" type="button" hidden>停止</button>
+    </form>
+  </section>
+
+  <!-- ================= 脚本库 ================= -->
+  <section class="pane" id="pane-scripts">
+    <div class="filter">
+      <button id="f-site" class="chip active">当前站点</button>
+      <button id="f-all" class="chip">全部</button>
+      <button id="new-script" class="mini primary right">＋ 新建</button>
+    </div>
+    <div id="script-list" class="list"></div>
+    <p id="script-empty" class="empty" hidden></p>
+
+    <div id="script-form" class="form" hidden>
+      <label class="field"><span>名称</span>
+        <input id="s-title" type="text" placeholder="例如：提取商品列表" /></label>
+      <label class="field"><span>id</span>
+        <input id="s-id" type="text" placeholder="extract-products（文件名，保存后不可改）" /></label>
+      <label class="field"><span>说明</span>
+        <textarea id="s-desc" rows="2" placeholder="这个脚本做什么、什么时候用——agent 靠它判断该不该调用"></textarea></label>
+      <div class="field"><span>类型</span>
+        <select id="s-kind">
+          <option value="extract">数据提取 extract（return 数据）</option>
+          <option value="restyle">页面美化 restyle（改样式/排版）</option>
+          <option value="automate">自动化 automate（点击/翻页/填写）</option>
+          <option value="inspect">探查 inspect（报告页面结构）</option>
+          <option value="other">其它 other</option>
+        </select>
+      </div>
+      <div class="field"><span>运行范围</span>
+        <select id="s-scope">
+          <option value="site">当前站点</option>
+          <option value="all">所有网站</option>
+          <option value="custom">自定义</option>
+        </select>
+        <input id="s-match" type="text" placeholder="例如 x.com 或 youtube.com/watch，多个用逗号" hidden />
+      </div>
+      <label class="check"><input id="s-autorun" type="checkbox" />
+        <span>页面加载时自动运行<em>（只对改页面的脚本有意义；关掉后需刷新页面还原）</em></span></label>
+      <label class="field"><span>JavaScript（函数体：<code>args</code> 可用，可 <code>await</code>，<code>return</code> 结果）</span>
+        <textarea id="s-code" rows="12" spellcheck="false" placeholder="return [...document.querySelectorAll('.item')].map(el => el.textContent.trim());"></textarea></label>
+      <div class="actions">
+        <button id="s-cancel" class="ghost">取消</button>
+        <button id="s-delete" class="danger" hidden>删除</button>
+        <button id="s-save" class="primary">保存到能力库</button>
+      </div>
+      <p id="s-err" class="err" hidden></p>
+    </div>
+
+    <div id="run-result" class="result" hidden>
+      <div class="result-head">
+        <strong id="rr-name"></strong>
+        <span class="right">
+          <button id="rr-copy" class="mini ghost">复制</button>
+          <a id="rr-download" class="mini ghost" download>下载</a>
+          <button id="rr-close" class="icon-btn">✕</button>
+        </span>
+      </div>
+      <pre id="rr-body" class="json"></pre>
+    </div>
+  </section>
+
+  <!-- ================= 页面 ================= -->
+  <section class="pane" id="pane-page">
+    <div class="card" id="status-card">
+      <div class="row"><span>bridge</span><b id="st-bridge">—</b></div>
+      <div class="row"><span>扩展连接</span><b id="st-ext">—</b></div>
+      <div class="row"><span>服务</span><b id="st-svc">—</b></div>
+      <div class="row"><span>自动运行脚本</span><b id="st-auto">—</b></div>
+    </div>
+
+    <h3>在这个页面上快速做</h3>
+    <div class="quick" id="quick"></div>
+
+    <h3>这个站以前跑过什么</h3>
+    <div id="prior" class="prior"></div>
+
+    <h3>标签页</h3>
+    <div id="tabs-list" class="tabs-list"></div>
+  </section>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="panel.js"></script>
+</body>
+</html>
