@@ -79,6 +79,12 @@ select.mini { max-width: 130px; }
 .filter { display: flex; gap: 6px; align-items: center; margin-bottom: 9px; flex: none; }
 .chip { background: var(--chip); border: 1px solid var(--line); border-radius: 12px; padding: 3px 10px; font-size: 11.5px; cursor: pointer; }
 .chip.active { background: var(--accent); color: #fff; border-color: transparent; }
+.lede { color: var(--muted); font-size: 11.5px; margin: 0 0 9px; line-height: 1.6; }
+.prompt-list { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 6px; }
+.prompt-chip { background: var(--chip); border: 1px solid var(--line); border-radius: 12px;
+               padding: 3px 9px; font-size: 11px; cursor: pointer; }
+.prompt-chip:hover { border-color: var(--accent); color: var(--accent); }
+.uses { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
 .search { width: 100%; border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
           background: var(--bg); margin-bottom: 8px; font-size: 12px; flex: none; }
 .search:focus { outline: 1px solid var(--accent); border-color: var(--accent); }

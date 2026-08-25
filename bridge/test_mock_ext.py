@@ -346,6 +346,36 @@ async def main():
     code, data = await asyncio.to_thread(http, "POST", "/agent/run/does-not-exist/stop")
     results.append(("agents.stop_unknown_is_false", code == 200 and data.get("ok") is False))
 
+    # 27. user scripts are a separate library from agent capabilities, and their
+    #     switch must actually persist — it answered 422 and silently saved
+    #     nothing because the request model was defined after its first use
+    #     (`from __future__ import annotations` turned the NameError into a
+    #     query parameter instead of a crash).
+    code, data = await asyncio.to_thread(http, "PUT", "/user-script/new", {
+        "name": "__wb-test-user", "code": "return 1;", "matches": ["example.com"]})
+    uid = (data.get("script") or {}).get("id", "")
+    saved_user = code == 200 and bool(uid)
+
+    code, data = await asyncio.to_thread(
+        http, "POST", f"/user-script/{uid}/autorun", {"autorun": True})
+    results.append(("user_scripts.autorun_persists",
+                    saved_user and code == 200 and data["script"]["autorun"] is True))
+
+    code, data = await asyncio.to_thread(http, "GET", "/capabilities/autorun")
+    ids = [s["id"] for s in data.get("scripts", [])]
+    results.append(("user_scripts.registered_for_autorun", any(uid in i for i in ids)))
+
+    # the two libraries must not bleed into each other
+    code, data = await asyncio.to_thread(
+        http, "GET", "/capabilities?url=" + urllib.parse.quote("https://example.com/"))
+    leaked = any("__wb-test-user" in (c.get("title") or "") for c in data.get("capabilities", []))
+    code, data = await asyncio.to_thread(
+        http, "GET", "/user-scripts?url=" + urllib.parse.quote("https://example.com/"))
+    listed = any(s["id"] == uid for s in data.get("scripts", []))
+    results.append(("user_scripts.separate_from_capabilities", listed and not leaked))
+
+    await asyncio.to_thread(http, "DELETE", f"/user-script/{uid}")
+
     # --- WS security tests last: they connect their own sockets, which take over
     # --- the hub's single extension slot, so no mock round-trip survives them.
     # 8. a web-page Origin must be rejected on the extension socket

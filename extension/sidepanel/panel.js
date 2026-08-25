@@ -24,6 +24,11 @@ const state = {
   session: null,      // agent session to continue, so follow-ups keep context
   agents: { default: "", runners: {} },
   wantAgent: null,    // agent picked last time the panel was open
+  usage: {},          // capability id → how often it has been used here
+  userScripts: [],    // the user's own scripts
+  userTotal: 0,
+  userFilterSite: true,
+  editingUser: null,
   pendingRun: null,   // a run that was still going when the panel closed
 };
 
@@ -111,7 +116,7 @@ document.querySelectorAll(".tab").forEach((btn) => {
     document.querySelectorAll(".pane").forEach((p) =>
       p.classList.toggle("active", p.id === "pane-" + btn.dataset.tab));
     if (btn.dataset.tab === "scripts") loadScripts();
-    if (btn.dataset.tab === "page") loadPage();
+    if (btn.dataset.tab === "page") loadUserScripts();
   });
 });
 
@@ -210,8 +215,12 @@ function offerSave(bubble, text) {
   box.innerHTML = '<button class="mini primary">存成脚本</button><button class="mini ghost">在本页运行</button>';
   const [saveBtn, runBtn] = box.querySelectorAll("button");
   saveBtn.addEventListener("click", () => {
-    openForm(null, { code: m[1].trim(), title: "", kind: "extract" });
-    document.querySelector('.tab[data-tab="scripts"]').click();
+    // the agent drafted this at the user's request, so it is the user's script:
+    // it goes to 页面 (their own library), not into the agent's capabilities
+    document.querySelector('.tab[data-tab="page"]').click();
+    openUserForm(null);
+    $("u-code").value = m[1].trim();
+    $("u-name").focus();
   });
   runBtn.addEventListener("click", async () => {
     runBtn.disabled = true;
@@ -220,8 +229,8 @@ function offerSave(bubble, text) {
         method: "POST",
         body: JSON.stringify({ code: m[1].trim(), url: state.tab?.url || "", timeout_ms: 60000 }),
       });
-      showResult("对话里的脚本", data.result);
-      document.querySelector('.tab[data-tab="scripts"]').click();
+      document.querySelector('.tab[data-tab="page"]').click();
+      showUserResult("对话里的脚本", data.result);
     } catch (e) {
       addMsg("err", esc(e.message));
     } finally {
@@ -428,26 +437,20 @@ async function loadScripts() {
   try {
     const data = await api("/capabilities" + (url ? "?url=" + encodeURIComponent(url) : ""));
     state.caps = data.capabilities || [];
+    try {
+      const j = await api("/journal?limit=100" + (url ? "&host=" + encodeURIComponent(hostOf(state.tab?.url)) : ""));
+      state.usage = {};
+      for (const m of j.matches || []) {
+        const id = m.capability || m.promoted_to;
+        if (id) state.usage[id] = m;
+      }
+    } catch { state.usage = {}; }
     renderScripts();
   } catch (e) {
     $("script-list").innerHTML = "";
     $("script-empty").hidden = false;
     $("script-empty").textContent = "读不到能力库：" + e.message;
   }
-}
-
-function paramField(name, spec) {
-  spec = spec || {};
-  const t = (spec.type || "string").toLowerCase();
-  const def = spec.default;
-  if (t === "boolean")
-    return `<input type="checkbox" data-p="${esc(name)}" data-t="boolean" ${def ? "checked" : ""}>`;
-  if (Array.isArray(spec.enum) && spec.enum.length)
-    return `<select data-p="${esc(name)}" data-t="${t}">` +
-      spec.enum.map((v) => `<option ${v === def ? "selected" : ""}>${esc(v)}</option>`).join("") + "</select>";
-  return `<input type="${t === "number" ? "number" : "text"}" data-p="${esc(name)}" data-t="${t}"
-    value="${def === undefined || def === null ? "" : esc(typeof def === "string" ? def : JSON.stringify(def))}"
-    placeholder="${esc(spec.description || name)}">`;
 }
 
 function visibleCaps() {
@@ -464,47 +467,131 @@ function renderScripts() {
     list.innerHTML = "";
     $("script-empty").hidden = false;
     $("script-empty").textContent = $("s-search").value.trim()
-      ? "没有匹配的脚本。"
+      ? "没有匹配的能力。"
       : state.filterSite
-        ? "这个站点还没有专属脚本。切到「全部」看通用能力，或让对话里的 agent 写一个。"
-        : "能力库是空的。";
+        ? "agent 在这个站点还没有攒下专属能力。去「对话」里让它做点什么，做成了就会出现在这里。"
+        : "还没有任何能力。";
     return;
   }
   $("script-empty").hidden = true;
+  // Names and plain descriptions only. This list answers "what can it do / what
+  // has it done here", not "what does the code say" — the code is the agent's
+  // business, and showing it buried the one thing the user came for.
   list.innerHTML = caps.map((c) => {
-    const names = Object.keys(c.params || {});
-    const canAuto = c.kind !== "extract";
-    return `<div class="item" data-id="${esc(c.id)}">
+    const u = state.usage[c.id];
+    const used = u ? `用过 ${u.ok_runs || u.runs} 次` : "还没用过";
+    const when = u && u.last ? " · " + u.last.replace("T", " ").slice(5, 16) : "";
+    return `<div class="item">
       <div class="top">
         <span class="name">${esc(c.title || c.id)}</span>
         <span class="kind">${KIND_LABEL[c.kind] || c.kind || ""}</span>
       </div>
-      ${c.description ? `<div class="desc">${esc(c.description.slice(0, 120))}</div>` : ""}
+      ${c.description ? `<div class="desc">${esc(c.description.slice(0, 150))}</div>` : ""}
+      <div class="ops"><span class="uses">${used}${when}</span></div>
+    </div>`;
+  }).join("");
+}
+
+// --------------------------------------------------------------------------- //
+// page tab
+// --------------------------------------------------------------------------- //
+// --------------------------------------------------------------------------- //
+// 页面 tab — the user's own scripts
+// --------------------------------------------------------------------------- //
+// Separate from the capability library on purpose: this code belongs to the
+// user. They paste it, read it, edit it. The agent's capabilities are machine
+// facing and live in their own tab.
+const PROMPTS = {
+  beautify: `请写一段可以直接在浏览器页面执行的原生 JavaScript（不使用任何外部库）。
+目标：美化当前页面 —— [描述你想要的效果，例如：正文栏加宽到 90%、隐藏左右侧边栏、字号调大到 17px、行距 1.8]。
+要求：只修改 DOM 和样式，代码要能重复执行不报错（先判断元素是否存在）。
+页面相关 HTML 结构如下（右键→检查→复制元素）：
+[粘贴 HTML 片段]`,
+  addbtn: `请写一段可以直接在浏览器页面执行的原生 JavaScript（不使用任何外部库）。
+目标：在页面右上角添加一个悬浮按钮，点击后 [描述功能，例如：一键复制页面标题和网址 / 滚动到评论区]。
+要求：按钮用 position:fixed 定位，样式美观，重复执行不重复添加按钮。
+页面相关 HTML 结构如下：
+[粘贴 HTML 片段]`,
+  clean: `请写一段可以直接在浏览器页面执行的原生 JavaScript（不使用任何外部库）。
+目标：清理当前页面 —— 移除 [广告位 / 弹窗 / 推荐区 / 悬浮客服] 等干扰元素。
+要求：用 querySelectorAll 找到元素后 remove()；对动态加载的元素用 MutationObserver 持续清理。
+需要清理的元素 HTML 如下：
+[粘贴 HTML 片段]`,
+  list: `请写一段可以直接在浏览器页面执行的原生 JavaScript（不使用任何外部库）。
+目标：从页面提取 [商品 / 文章 / 职位] 列表，每条包含字段：[标题、价格、链接、…]。
+要求：
+1. 代码末尾必须用 return 返回一个 JSON 数组（纯对象数组，不能包含 DOM 节点）
+2. 字段取不到时给 null，文本要 trim()
+3. 可以使用 await（比如等待懒加载）
+列表项的 HTML 结构如下（右键→检查→复制元素）：
+[粘贴一条列表项的 HTML]`,
+  table: `请写一段可以直接在浏览器页面执行的原生 JavaScript（不使用任何外部库）。
+目标：把页面中的表格提取为 JSON。
+要求：
+1. 第一行作为字段名，每行数据转成对象
+2. 代码末尾必须用 return 返回 JSON 数组
+表格的 HTML 结构如下：
+[粘贴 <table> 的 HTML，太长可只贴表头和一两行]`,
+  paging: `请写一段可以直接在浏览器页面执行的原生 JavaScript（不使用任何外部库）。
+目标：翻页批量提取 —— 每页提取 [字段列表]，然后点击「下一页」按钮继续，直到最后一页或最多 [10] 页。
+要求：
+1. 用 async 写法；每次翻页后 await new Promise(r => setTimeout(r, 1500)) 等待加载
+2. 「下一页」按钮选择器：[粘贴按钮的选择器或 HTML]；按钮禁用或消失即停止
+3. 所有页的数据合并成一个数组，代码末尾用 return 返回
+列表项的 HTML 结构如下：
+[粘贴一条列表项的 HTML]`,
+};
+
+async function loadUserScripts() {
+  const url = state.userFilterSite ? state.tab?.url || "" : "";
+  try {
+    const data = await api("/user-scripts" + (url ? "?url=" + encodeURIComponent(url) : ""));
+    state.userScripts = data.scripts || [];
+    state.userTotal = data.total || 0;
+    renderUserScripts();
+  } catch (e) {
+    $("user-list").innerHTML = "";
+    $("user-empty").hidden = false;
+    $("user-empty").textContent = "读不到脚本：" + e.message;
+  }
+}
+
+function renderUserScripts() {
+  const list = $("user-list");
+  if (!state.userScripts.length) {
+    list.innerHTML = "";
+    $("user-empty").hidden = false;
+    $("user-empty").textContent = state.userFilterSite && state.userTotal
+      ? "这个站点还没有你的脚本（其它站点有 " + state.userTotal + " 个，点「全部」查看）。"
+      : "还没有脚本。点「＋ 新建脚本」，贴一段 JS 就能用。";
+    return;
+  }
+  $("user-empty").hidden = true;
+  list.innerHTML = state.userScripts.map((u) => `<div class="item" data-id="${esc(u.id)}">
+      <div class="top">
+        <span class="name">${esc(u.name)}</span>
+        <span class="kind">${esc((u.matches || []).join(",").slice(0, 22))}</span>
+      </div>
+      ${u.note ? `<div class="desc">${esc(u.note)}</div>` : ""}
       <div class="ops">
         <button class="mini primary run">运行</button>
         <button class="mini ghost edit">编辑</button>
-        ${names.length ? '<button class="mini ghost params-btn">参数</button>' : ""}
-        ${canAuto ? `<label class="switch"><input type="checkbox" class="auto" ${c.autorun ? "checked" : ""}>自动运行</label>` : ""}
+        <label class="switch"><input type="checkbox" class="auto" ${u.autorun ? "checked" : ""}>自动运行</label>
       </div>
-      ${names.length ? `<div class="params">${names.map((n) =>
-        `<div class="prow"><label title="${esc((c.params[n] || {}).description || "")}">${esc(n)}</label>${paramField(n, c.params[n])}</div>`).join("")}</div>` : ""}
-    </div>`;
-  }).join("");
+    </div>`).join("");
 
   list.querySelectorAll(".item").forEach((item) => {
-    const id = item.dataset.id;
-    const cap = state.caps.find((c) => c.id === id);
-    item.querySelector(".params-btn")?.addEventListener("click", () => item.classList.toggle("open"));
-    item.querySelector(".run").addEventListener("click", () => runScript(item, cap));
-    item.querySelector(".edit").addEventListener("click", () => openForm(id));
-    item.querySelector(".auto")?.addEventListener("change", async (e) => {
+    const u = state.userScripts.find((x) => x.id === item.dataset.id);
+    item.querySelector(".run").addEventListener("click", () => runUserScript(item, u));
+    item.querySelector(".edit").addEventListener("click", () => openUserForm(u));
+    item.querySelector(".auto").addEventListener("change", async (e) => {
       try {
-        await api(`/capability/${encodeURIComponent(id)}/autorun`, {
+        await api(`/user-script/${encodeURIComponent(u.id)}/autorun`, {
           method: "POST", body: JSON.stringify({ autorun: e.target.checked }),
         });
         await chrome.runtime.sendMessage({ type: "WB_PANEL", action: "sync-autorun" });
+        u.autorun = e.target.checked;
         toast(e.target.checked ? "已开启自动运行（刷新页面生效）" : "已关闭（刷新页面还原）");
-        cap.autorun = e.target.checked;
       } catch (err) {
         e.target.checked = !e.target.checked;
         toast("失败：" + err.message, 2600);
@@ -513,254 +600,137 @@ function renderScripts() {
   });
 }
 
-function readParams(item) {
-  const params = {};
-  item.querySelectorAll("[data-p]").forEach((el) => {
-    const t = el.dataset.t;
-    if (t === "boolean") { params[el.dataset.p] = el.checked; return; }
-    const raw = el.value.trim();
-    if (!raw) return;
-    if (t === "number") params[el.dataset.p] = Number(raw);
-    else if (t === "object" || t === "array") {
-      try { params[el.dataset.p] = JSON.parse(raw); }
-      catch { throw new Error(`参数 ${el.dataset.p} 不是合法 JSON`); }
-    } else params[el.dataset.p] = raw;
-  });
-  return params;
-}
-
-async function runScript(item, cap) {
+async function runUserScript(item, u) {
   const btn = item.querySelector(".run");
   btn.disabled = true;
   btn.textContent = "运行中…";
   try {
-    const data = await api(`/capability/${encodeURIComponent(cap.id)}`, {
-      method: "POST",
-      body: JSON.stringify({ params: readParams(item), url: state.tab?.url || "", timeout_ms: 120000 }),
+    const data = await api(`/user-script/${encodeURIComponent(u.id)}/run`, {
+      method: "POST", body: JSON.stringify({ url: state.tab?.url || "" }),
     });
-    showResult(cap.title || cap.id, data.result);
+    showUserResult(u.name, data.result);
   } catch (e) {
-    showResult(cap.title || cap.id, { error: e.message });
+    showUserResult(u.name, { error: e.message });
   } finally {
     btn.disabled = false;
     btn.textContent = "运行";
   }
 }
 
-function showResult(name, result) {
+function showUserResult(name, result) {
   const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-  $("rr-name").textContent = name;
-  $("rr-body").textContent = text ?? "(无返回值)";
-  $("run-result").hidden = false;
-  const blob = new Blob([text ?? ""], { type: "application/json" });
-  $("rr-download").href = URL.createObjectURL(blob);
-  $("rr-download").download = name.replace(/\s+/g, "-") + ".json";
-}
-$("rr-close").addEventListener("click", () => ($("run-result").hidden = true));
-$("rr-copy").addEventListener("click", async () => {
-  await navigator.clipboard.writeText($("rr-body").textContent);
-  toast("已复制");
-});
-
-// ---- new / edit form ----
-function openForm(id, preset) {
-  const cap = id ? state.caps.find((c) => c.id === id) : null;
-  state.editing = id || "";
-  $("script-form").hidden = false;
-  $("script-list").hidden = true;
-  $("script-empty").hidden = true;
-  $("s-err").hidden = true;
-  $("s-delete").hidden = !id;
-  $("s-id").disabled = !!id;
-  $("s-title").value = cap?.title || preset?.title || "";
-  $("s-id").value = cap?.id || "";
-  $("s-desc").value = cap?.description || "";
-  $("s-kind").value = cap?.kind || preset?.kind || "extract";
-  $("s-autorun").checked = !!cap?.autorun;
-  $("s-code").value = preset?.code || "";
-  fillParams(cap?.params || {});
-  const m = cap?.match || [];
-  $("s-scope").value = !cap ? "site" : m.includes("*") ? "all" : "custom";
-  $("s-match").value = m.filter((x) => x !== "*").join(", ");
-  $("s-match").hidden = $("s-scope").value !== "custom";
-  if (id) {
-    // The source is not in the listing payload — fetch it so an edit starts
-    // from the real code rather than an empty box.
-    api(`/capability/${encodeURIComponent(id)}`).then((d) => ($("s-code").value = d.source || ""))
-      .catch(() => {});
-  }
-}
-$("new-script").addEventListener("click", () => openForm(null));
-$("s-search").addEventListener("input", renderScripts);
-$("s-cancel").addEventListener("click", closeForm);
-$("s-scope").addEventListener("change", () => ($("s-match").hidden = $("s-scope").value !== "custom"));
-
-// ---- parameter editor ----
-// Without this the panel could only ever save `params: {}`, so a script authored
-// here could never take arguments and the bridge's validation had nothing to
-// check. Editing the declaration is what makes a saved script reusable.
-const PARAM_TYPES = ["string", "number", "boolean", "object", "array"];
-
-function paramRow(name = "", spec = {}) {
-  const row = document.createElement("div");
-  row.className = "prow-edit";
-  row.innerHTML = `
-    <input class="pname" placeholder="参数名" value="${esc(name)}">
-    <select class="ptype">${PARAM_TYPES.map((t) =>
-      `<option ${t === (spec.type || "string") ? "selected" : ""}>${t}</option>`).join("")}</select>
-    <label class="req"><input type="checkbox" class="preq" ${spec.required ? "checked" : ""}>必填</label>
-    <button class="icon-btn pdel" type="button" title="删除">✕</button>
-    <input class="pdesc" placeholder="说明（agent 靠它知道该传什么）＋默认值写在下一格"
-           value="${esc(spec.description || "")}">
-    <input class="pdef" placeholder="默认值（留空=无默认）"
-           value="${spec.default === undefined ? "" : esc(typeof spec.default === "string" ? spec.default : JSON.stringify(spec.default))}">`;
-  row.querySelector(".pdef").style.gridColumn = "1 / -1";
-  row.querySelector(".pdel").addEventListener("click", () => row.remove());
-  return row;
+  $("ur-name").textContent = name;
+  $("ur-body").textContent = text ?? "(无返回值)";
+  $("u-result").hidden = false;
+  $("ur-download").href = URL.createObjectURL(new Blob([text ?? ""], { type: "application/json" }));
+  $("ur-download").download = name.replace(/\s+/g, "-") + ".json";
 }
 
-function fillParams(params) {
-  const box = $("s-params");
-  box.innerHTML = "";
-  for (const [name, spec] of Object.entries(params || {})) box.appendChild(paramRow(name, spec));
+function openUserForm(u) {
+  state.editingUser = u?.id || "";
+  $("user-form").hidden = false;
+  $("user-list").hidden = true;
+  $("user-empty").hidden = true;
+  $("u-err").hidden = true;
+  $("u-delete").hidden = !u;
+  $("u-name").value = u?.name || "";
+  $("u-code").value = u?.code || "";
+  $("u-autorun").checked = !!u?.autorun;
+  const m = u?.matches || [];
+  $("u-scope").value = !u ? "site" : m.includes("*") ? "all" : "custom";
+  $("u-match").value = m.filter((x) => x !== "*").join(", ");
+  $("u-match").hidden = $("u-scope").value !== "custom";
 }
 
-function collectParams() {
-  const out = {};
-  for (const row of $("s-params").querySelectorAll(".prow-edit")) {
-    const name = row.querySelector(".pname").value.trim();
-    if (!name) continue;
-    const type = row.querySelector(".ptype").value;
-    const spec = { type, description: row.querySelector(".pdesc").value.trim() };
-    if (row.querySelector(".preq").checked) spec.required = true;
-    const raw = row.querySelector(".pdef").value.trim();
-    if (raw !== "") {
-      // a default must match the declared type, or the bridge rejects every call
-      if (type === "number") spec.default = Number(raw);
-      else if (type === "boolean") spec.default = /^(true|1|yes)$/i.test(raw);
-      else if (type === "object" || type === "array") {
-        try { spec.default = JSON.parse(raw); }
-        catch { throw new Error(`参数 ${name} 的默认值不是合法 JSON`); }
-      } else spec.default = raw;
-      if (spec.required) delete spec.required;   // lint refuses both at once
-    }
-    out[name] = spec;
-  }
-  return out;
+function closeUserForm() {
+  $("user-form").hidden = true;
+  $("user-list").hidden = false;
+  state.editingUser = null;
+  loadUserScripts();
 }
 
-$("s-addparam").addEventListener("click", () => $("s-params").appendChild(paramRow()));
-
-function closeForm() {
-  $("script-form").hidden = true;
-  $("script-list").hidden = false;
-  state.editing = null;
-  loadScripts();
-}
-
-$("s-save").addEventListener("click", async () => {
-  const id = ($("s-id").value || "").trim().replace(/[^A-Za-z0-9_.-]/g, "-");
-  const code = $("s-code").value;
-  if (!id) return showErr("需要一个 id（脚本的文件名）");
-  if (!code.trim()) return showErr("代码不能为空");
-  const host = (() => { try { return new URL(state.tab?.url || "").hostname.replace(/^www\./, ""); } catch { return ""; } })();
-  let params;
-  try { params = collectParams(); } catch (e) { return showErr(e.message); }
-  const scope = $("s-scope").value;
-  const match = scope === "all" ? ["*"]
-    : scope === "custom" ? ($("s-match").value.split(",").map((x) => x.trim()).filter(Boolean) || ["*"])
-    : [host || "*"];
-  const meta = {
-    id,
-    title: $("s-title").value.trim() || id,
-    description: $("s-desc").value.trim(),
-    kind: $("s-kind").value,
-    match: match.length ? match : ["*"],
-    params,
-    autorun: $("s-autorun").checked,
-  };
-  const source = "/* @web-bridge-capability\n" + JSON.stringify(meta, null, 2) + "\n*/\n" + code;
+function currentScopeMatches() {
+  const scope = $("u-scope").value;
+  let host = "", path = "";
   try {
-    await api(`/capability/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ source }) });
-    await chrome.runtime.sendMessage({ type: "WB_PANEL", action: "sync-autorun" });
-    toast("已保存到能力库");
-    closeForm();
-  } catch (e) {
-    showErr(e.message);
+    const u = new URL(state.tab?.url || "");
+    host = u.hostname.replace(/^www\./, "");
+    path = host + u.pathname;
+  } catch (_) {}
+  if (scope === "all") return ["*"];
+  if (scope === "page") return [path || host || "*"];
+  if (scope === "custom") {
+    return $("u-match").value.split(",").map((x) => x.trim()).filter(Boolean).length
+      ? $("u-match").value.split(",").map((x) => x.trim()).filter(Boolean) : ["*"];
   }
-});
-$("s-delete").addEventListener("click", async () => {
-  if (!state.editing) return;
-  await api(`/capability/${encodeURIComponent(state.editing)}`, { method: "DELETE" }).catch(() => {});
-  await chrome.runtime.sendMessage({ type: "WB_PANEL", action: "sync-autorun" });
-  toast("已删除");
-  closeForm();
-});
-function showErr(msg) { $("s-err").hidden = false; $("s-err").textContent = msg; }
+  return [host || "*"];
+}
 
-$("f-site").addEventListener("click", () => { state.filterSite = true; $("f-site").classList.add("active"); $("f-all").classList.remove("active"); loadScripts(); });
-$("f-all").addEventListener("click", () => { state.filterSite = false; $("f-all").classList.add("active"); $("f-site").classList.remove("active"); loadScripts(); });
+function wirePageTab() {
+  $("u-new").addEventListener("click", () => openUserForm(null));
+  $("u-cancel").addEventListener("click", closeUserForm);
+  $("u-scope").addEventListener("change", () => ($("u-match").hidden = $("u-scope").value !== "custom"));
+  $("ur-close").addEventListener("click", () => ($("u-result").hidden = true));
+  $("ur-copy").addEventListener("click", async () => {
+    await navigator.clipboard.writeText($("ur-body").textContent);
+    toast("已复制");
+  });
+  $("u-site").addEventListener("click", () => {
+    state.userFilterSite = true;
+    $("u-site").classList.add("active"); $("u-all").classList.remove("active");
+    loadUserScripts();
+  });
+  $("u-all").addEventListener("click", () => {
+    state.userFilterSite = false;
+    $("u-all").classList.add("active"); $("u-site").classList.remove("active");
+    loadUserScripts();
+  });
 
-// --------------------------------------------------------------------------- //
-// page tab
-// --------------------------------------------------------------------------- //
-const QUICK = [
-  { id: "extract-article", label: "提取正文" },
-  { id: "inspect-page", label: "探查结构" },
-  { id: "extract-tables", label: "提取表格" },
-  { id: "reader-mode", label: "阅读模式" },
-];
-
-async function loadPage() {
-  $("quick").innerHTML = QUICK.map((q) => `<button class="chip-btn" data-cap="${q.id}">${q.label}</button>`).join("");
-  $("quick").querySelectorAll("[data-cap]").forEach((b) =>
+  // prompt templates: the user may well take these to a different AI, which is
+  // exactly why they stay — the panel is not the only place scripts get written
+  document.querySelectorAll(".prompt-chip").forEach((b) =>
     b.addEventListener("click", async () => {
-      b.disabled = true;
-      try {
-        const data = await api(`/capability/${b.dataset.cap}`, {
-          method: "POST", body: JSON.stringify({ params: {}, url: state.tab?.url || "" }),
-        });
-        showResult(b.textContent, data.result);
-        document.querySelector('.tab[data-tab="scripts"]').click();
-      } catch (e) { toast(e.message, 2800); } finally { b.disabled = false; }
+      await navigator.clipboard.writeText(PROMPTS[b.dataset.p] || "");
+      const old = b.textContent;
+      b.textContent = "已复制 ✓";
+      setTimeout(() => (b.textContent = old), 1200);
     }));
 
-  try {
-    const h = await fetch(BASE + "/health").then((r) => r.json());
-    $("st-bridge").textContent = h.ok ? "运行中" : "异常";
-    $("st-ext").textContent = h.extension_connected ? "已连接 ✅" : "未连接 ❌";
-    $("st-svc").textContent = h.version ? `v${h.version}` : "—";
-  } catch {
-    $("st-bridge").textContent = "未运行 ❌";
-  }
-  try {
-    const a = await chrome.runtime.sendMessage({ type: "WB_PANEL", action: "sync-autorun" });
-    $("st-auto").textContent = a?.ok ? `${a.registered ?? 0} 个已注册` : a?.error || "—";
-  } catch { $("st-auto").textContent = "—"; }
+  $("u-ask-agent").addEventListener("click", () => {
+    document.querySelector('.tab[data-tab="chat"]').click();
+    $("input").value = "帮我写一段在这个页面上跑的 JS：";
+    $("input").focus();
+  });
 
-  try {
-    const j = await api("/journal?limit=6&host=" + encodeURIComponent(hostOf(state.tab?.url)));
-    const rows = j.matches || [];
-    $("prior").innerHTML = rows.length
-      ? rows.map((m) => `<div class="p" data-code="${esc(m.code || "")}">
-          <b>${esc((m.summary || m.capability || "").slice(0, 60))}</b>
-          <span>成功 ${m.ok_runs}/${m.runs} 次 · ${esc(m.last || "")}${m.promoted_to ? " · 已沉淀 " + esc(m.promoted_to) : ""}</span></div>`).join("")
-      : '<p class="empty">这个站还没有记录。</p>';
-    $("prior").querySelectorAll(".p").forEach((el) =>
-      el.addEventListener("click", () => {
-        if (!el.dataset.code) return;
-        openForm(null, { code: el.dataset.code, kind: "extract" });
-        document.querySelector('.tab[data-tab="scripts"]').click();
-      }));
-  } catch { $("prior").innerHTML = ""; }
+  $("u-save").addEventListener("click", async () => {
+    const code = $("u-code").value;
+    if (!code.trim()) { $("u-err").hidden = false; $("u-err").textContent = "代码不能为空"; return; }
+    try {
+      await api(`/user-script/${encodeURIComponent(state.editingUser || "new")}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: $("u-name").value.trim(),
+          code,
+          matches: currentScopeMatches(),
+          autorun: $("u-autorun").checked,
+        }),
+      });
+      await chrome.runtime.sendMessage({ type: "WB_PANEL", action: "sync-autorun" });
+      toast("已保存");
+      closeUserForm();
+    } catch (e) {
+      $("u-err").hidden = false;
+      $("u-err").textContent = e.message;
+    }
+  });
 
-  try {
-    const t = await api("/tabs");
-    $("tabs-list").innerHTML = (t.tabs || []).slice(0, 12).map((x) =>
-      `<div class="t" data-id="${x.id}"><b>${esc((x.title || "").slice(0, 46))}</b><span>${esc((x.url || "").slice(0, 70))}</span></div>`).join("");
-    $("tabs-list").querySelectorAll(".t").forEach((el) =>
-      el.addEventListener("click", () => chrome.tabs.update(Number(el.dataset.id), { active: true })));
-  } catch { $("tabs-list").innerHTML = ""; }
+  $("u-delete").addEventListener("click", async () => {
+    if (!state.editingUser) return;
+    await api(`/user-script/${encodeURIComponent(state.editingUser)}`, { method: "DELETE" }).catch(() => {});
+    await chrome.runtime.sendMessage({ type: "WB_PANEL", action: "sync-autorun" });
+    toast("已删除");
+    closeUserForm();
+  });
 }
 
 const hostOf = (u) => { try { return new URL(u).hostname; } catch { return ""; } };
@@ -805,13 +775,27 @@ $("refresh").addEventListener("click", async () => {
   await refreshHeader();
   const active = document.querySelector(".tab.active").dataset.tab;
   if (active === "scripts") loadScripts();
-  if (active === "page") loadPage();
+  if (active === "page") loadUserScripts();
   toast("已刷新");
 });
 chrome.tabs.onActivated.addListener(refreshHeader);
 chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === "complete") refreshHeader(); });
 
 $("agent-pick").addEventListener("change", persist);
+
+$("f-site").addEventListener("click", () => {
+  state.filterSite = true;
+  $("f-site").classList.add("active"); $("f-all").classList.remove("active");
+  loadScripts();
+});
+$("f-all").addEventListener("click", () => {
+  state.filterSite = false;
+  $("f-all").classList.add("active"); $("f-site").classList.remove("active");
+  loadScripts();
+});
+$("s-search").addEventListener("input", renderScripts);
+
+wirePageTab();
 
 (async () => {
   await restore();          // before loadAgents, which honours the remembered pick

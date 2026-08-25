@@ -42,6 +42,7 @@ import config
 import capabilities
 import journal
 import agents
+import user_scripts
 import results
 
 VERSION = "0.2.0"
@@ -669,12 +670,93 @@ async def run_capability(cap_id: str, req: RunCapReq):
 
 @app.get("/capabilities/autorun", dependencies=[Depends(require_token)])
 async def autorun_list():
-    """What the extension should register to run on page load."""
-    return {"ok": True, "scripts": capabilities.autorun_for_registration()}
+    """What the extension should register to run on page load.
+
+    Both libraries feed this: the agent's capabilities and the user's own
+    scripts. They are separate everywhere else, but page-load registration is
+    one mechanism.
+    """
+    return {"ok": True, "scripts": capabilities.autorun_for_registration()
+                                   + user_scripts.autorun_for_registration()}
 
 
+# --------------------------------------------------------------------------- #
+# user scripts — the user's own page JS, kept apart from agent capabilities
+# --------------------------------------------------------------------------- #
 class AutorunReq(BaseModel):
     autorun: bool
+
+
+class UserScriptReq(BaseModel):
+    name: str = ""
+    code: str
+    matches: list[str] = ["*"]
+    autorun: bool = False
+    note: str = ""
+
+
+@app.get("/user-scripts", dependencies=[Depends(require_token)])
+async def list_user_scripts(url: str = ""):
+    return {"ok": True, "scripts": user_scripts.for_url(url),
+            "total": len(user_scripts.all_scripts())}
+
+
+@app.put("/user-script/{script_id}", dependencies=[Depends(require_token)])
+async def put_user_script(script_id: str, req: UserScriptReq):
+    try:
+        rec = user_scripts.save({**req.model_dump(),
+                                 "id": None if script_id == "new" else script_id})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    hub.notify("sync-autorun")
+    return {"ok": True, "script": rec}
+
+
+@app.delete("/user-script/{script_id}", dependencies=[Depends(require_token)])
+async def delete_user_script(script_id: str):
+    gone = user_scripts.delete(script_id)
+    if gone:
+        hub.notify("sync-autorun")
+    return {"ok": gone}
+
+
+@app.post("/user-script/{script_id}/autorun", dependencies=[Depends(require_token)])
+async def user_script_autorun(script_id: str, req: AutorunReq):
+    try:
+        rec = user_scripts.set_autorun(script_id, req.autorun)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    hub.notify("sync-autorun")
+    return {"ok": True, "script": rec}
+
+
+class RunUserScriptReq(BaseModel):
+    url: Optional[str] = None
+    timeout_ms: int = 60000
+
+
+@app.post("/user-script/{script_id}/run", dependencies=[Depends(require_token)])
+async def run_user_script(script_id: str, req: RunUserScriptReq):
+    """Run one on the page. Goes through the same exec path as everything else,
+    so the blocklist and the journal cover it too."""
+    script = user_scripts.get(script_id)
+    if not script:
+        raise HTTPException(status_code=404, detail=f"没有这个脚本：{script_id}")
+    _guard_url(req.url, None)
+    started = time.monotonic()
+    payload = {"code": script["code"], "args": {}, "url": req.url,
+               "timeout_ms": req.timeout_ms}
+    try:
+        data = await hub.command("exec", payload, timeout=req.timeout_ms / 1000 + 5)
+    except HTTPException as e:
+        journal.record(kind="user-script", code=script["code"], url=req.url or "",
+                       ok=False, error=str(e.detail),
+                       ms=int((time.monotonic() - started) * 1000))
+        raise
+    journal.record(kind="user-script", code=script["code"],
+                   url=data.get("tab_url") or req.url or "", ok=True,
+                   result=data.get("result"), ms=int((time.monotonic() - started) * 1000))
+    return JSONResponse({"ok": True, "script": script["name"], **data})
 
 
 @app.post("/capability/{cap_id}/autorun", dependencies=[Depends(require_token)])

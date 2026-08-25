@@ -32,6 +32,14 @@ async function api(path, opts = {}) {
     return { ok: true, result: { __echo_params: JSON.parse(opts.body || "{}").params } };
   }
   if (path.startsWith("/exec")) return { ok: true, result: "harness exec result" };
+  if (path.startsWith("/user-scripts")) return { ok: true, total: 1, scripts: [
+    { id: "u_demo", name: "隐藏侧边栏", code: "document.querySelector('.sidebar')?.remove();\nreturn {hidden:true};",
+      matches: ["example.com"], autorun: true, note: "" }] };
+  if (path.startsWith("/user-script/")) {
+    if ((opts.method || "GET") === "POST" && path.endsWith("/run"))
+      return { ok: true, script: "隐藏侧边栏", result: { hidden: true } };
+    return { ok: true, script: { id: "u_demo", name: "x", code: "return 1", matches: ["*"], autorun: false } };
+  }
   if (path.startsWith("/agent/run/")) {
     // a run that is still going, so reattach has something to follow
     return { ok: true, id: "harness-run", done: false, events: [] };

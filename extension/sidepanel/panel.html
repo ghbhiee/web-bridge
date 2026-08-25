@@ -18,8 +18,8 @@
 
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="chat" role="tab">对话</button>
-    <button class="tab" data-tab="scripts" role="tab">脚本库</button>
     <button class="tab" data-tab="page" role="tab">页面</button>
+    <button class="tab" data-tab="scripts" role="tab">脚本库</button>
   </nav>
 
   <!-- ================= 对话 ================= -->
@@ -54,89 +54,85 @@
     </form>
   </section>
 
-  <!-- ================= 脚本库 ================= -->
+  <!-- ================= 脚本库：agent 的能力（只读） ================= -->
   <section class="pane" id="pane-scripts">
+    <p class="lede">这是 <b>agent 自己用的能力</b>——它写下并复用的本事。你不用读代码，
+      看名字就知道它会做什么、用过多少次。想让它做新的事，直接在「对话」里说。</p>
+    <input id="s-search" class="search" type="search" placeholder="搜索能力" />
     <div class="filter">
-      <button id="f-site" class="chip active">当前站点</button>
+      <button id="f-site" class="chip active">这个站点</button>
       <button id="f-all" class="chip">全部</button>
-      <button id="new-script" class="mini primary right">＋ 新建</button>
     </div>
-    <input id="s-search" class="search" type="search" placeholder="搜索脚本（名称 / 说明 / id）" />
     <div id="script-list" class="list"></div>
     <p id="script-empty" class="empty" hidden></p>
+  </section>
 
-    <div id="script-form" class="form" hidden>
+  <!-- ================= 页面：用户自己的脚本 ================= -->
+  <section class="pane" id="pane-page">
+    <div class="filter">
+      <button id="u-site" class="chip active">这个站点</button>
+      <button id="u-all" class="chip">全部</button>
+      <button id="u-new" class="mini primary right">＋ 新建脚本</button>
+    </div>
+    <p class="lede">你自己的页面脚本：贴一段 JS 就能在这个页面上跑，或开自动运行。
+      不会写？下面有提示词模板可以复制给任意 AI，也可以在「对话」里让 agent 帮你写。</p>
+
+    <div id="user-list" class="list"></div>
+    <p id="user-empty" class="empty" hidden></p>
+
+    <div id="user-form" class="form" hidden>
       <label class="field"><span>名称</span>
-        <input id="s-title" type="text" placeholder="例如：提取商品列表" /></label>
-      <label class="field"><span>id</span>
-        <input id="s-id" type="text" placeholder="extract-products（文件名，保存后不可改）" /></label>
-      <label class="field"><span>说明</span>
-        <textarea id="s-desc" rows="2" placeholder="这个脚本做什么、什么时候用——agent 靠它判断该不该调用"></textarea></label>
-      <div class="field"><span>类型</span>
-        <select id="s-kind">
-          <option value="extract">数据提取 extract（return 数据）</option>
-          <option value="restyle">页面美化 restyle（改样式/排版）</option>
-          <option value="automate">自动化 automate（点击/翻页/填写）</option>
-          <option value="inspect">探查 inspect（报告页面结构）</option>
-          <option value="other">其它 other</option>
-        </select>
+        <input id="u-name" type="text" placeholder="例如：隐藏侧边栏 / 抓商品列表" /></label>
+
+      <div class="field">
+        <span>不会写代码？把提示词复制给 AI（ChatGPT / Claude / 任意 agent）</span>
+        <div class="prompt-list">
+          <button class="prompt-chip" data-p="beautify" type="button">美化页面 ⧉</button>
+          <button class="prompt-chip" data-p="addbtn" type="button">添加功能按钮 ⧉</button>
+          <button class="prompt-chip" data-p="clean" type="button">去广告/清理 ⧉</button>
+          <button class="prompt-chip" data-p="list" type="button">提取列表 ⧉</button>
+          <button class="prompt-chip" data-p="table" type="button">提取表格 ⧉</button>
+          <button class="prompt-chip" data-p="paging" type="button">翻页提取 ⧉</button>
+        </div>
+        <button id="u-ask-agent" class="mini ghost" type="button">或者：让对话里的 agent 帮我写 →</button>
       </div>
-      <div class="field"><span>运行范围</span>
-        <select id="s-scope">
-          <option value="site">当前站点</option>
+
+      <label class="field"><span>JavaScript（可 <code>await</code>；<code>return</code> 的数据会显示为 JSON）</span>
+        <textarea id="u-code" rows="12" spellcheck="false"
+          placeholder="return [...document.querySelectorAll('.item')].map(el => el.textContent.trim());"></textarea></label>
+
+      <div class="field"><span>在哪些页面可用</span>
+        <select id="u-scope">
+          <option value="site">这个站点</option>
+          <option value="page">只这个网址</option>
           <option value="all">所有网站</option>
           <option value="custom">自定义</option>
         </select>
-        <input id="s-match" type="text" placeholder="例如 x.com 或 youtube.com/watch，多个用逗号" hidden />
-      </div>
-      <div class="field">
-        <span>参数<em class="sub">（脚本里用 <code>args.名字</code> 取；bridge 会按这里的声明校验）</em></span>
-        <div id="s-params" class="params-edit"></div>
-        <button id="s-addparam" class="mini ghost" type="button">＋ 添加参数</button>
+        <input id="u-match" type="text" placeholder="例如 example.com 或 example.com/list，多个用逗号" hidden />
       </div>
 
-      <label class="check"><input id="s-autorun" type="checkbox" />
-        <span>页面加载时自动运行<em>（只对改页面的脚本有意义；关掉后需刷新页面还原）</em></span></label>
-      <label class="field"><span>JavaScript（函数体：<code>args</code> 可用，可 <code>await</code>，<code>return</code> 结果）</span>
-        <textarea id="s-code" rows="12" spellcheck="false" placeholder="return [...document.querySelectorAll('.item')].map(el => el.textContent.trim());"></textarea></label>
+      <label class="check"><input id="u-autorun" type="checkbox" />
+        <span>页面加载时自动运行<em>（美化类脚本用；关掉后刷新页面还原）</em></span></label>
+
       <div class="actions">
-        <button id="s-cancel" class="ghost">取消</button>
-        <button id="s-delete" class="danger" hidden>删除</button>
-        <button id="s-save" class="primary">保存到能力库</button>
+        <button id="u-cancel" class="ghost">取消</button>
+        <button id="u-delete" class="danger" hidden>删除</button>
+        <button id="u-save" class="primary">保存</button>
       </div>
-      <p id="s-err" class="err" hidden></p>
+      <p id="u-err" class="err" hidden></p>
     </div>
 
-    <div id="run-result" class="result" hidden>
+    <div id="u-result" class="result" hidden>
       <div class="result-head">
-        <strong id="rr-name"></strong>
+        <strong id="ur-name"></strong>
         <span class="right">
-          <button id="rr-copy" class="mini ghost">复制</button>
-          <a id="rr-download" class="mini ghost" download>下载</a>
-          <button id="rr-close" class="icon-btn">✕</button>
+          <button id="ur-copy" class="mini ghost">复制</button>
+          <a id="ur-download" class="mini ghost" download>下载</a>
+          <button id="ur-close" class="icon-btn">✕</button>
         </span>
       </div>
-      <pre id="rr-body" class="json"></pre>
+      <pre id="ur-body" class="json"></pre>
     </div>
-  </section>
-
-  <!-- ================= 页面 ================= -->
-  <section class="pane" id="pane-page">
-    <div class="card" id="status-card">
-      <div class="row"><span>bridge</span><b id="st-bridge">—</b></div>
-      <div class="row"><span>扩展连接</span><b id="st-ext">—</b></div>
-      <div class="row"><span>服务</span><b id="st-svc">—</b></div>
-      <div class="row"><span>自动运行脚本</span><b id="st-auto">—</b></div>
-    </div>
-
-    <h3>在这个页面上快速做</h3>
-    <div class="quick" id="quick"></div>
-
-    <h3>这个站以前跑过什么</h3>
-    <div id="prior" class="prior"></div>
-
-    <h3>标签页</h3>
-    <div id="tabs-list" class="tabs-list"></div>
   </section>
 
   <div id="toast" class="toast" hidden></div>
