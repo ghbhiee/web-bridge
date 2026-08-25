@@ -21,6 +21,7 @@ const state = {
   editing: null,      // capability id being edited, or "" for a new one
   context: null,      // page content pulled into the chat
   run: null,          // live agent run id
+  session: null,      // agent session to continue, so follow-ups keep context
   agents: { default: "", runners: {} },
 };
 
