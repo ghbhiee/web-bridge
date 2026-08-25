@@ -312,6 +312,19 @@ async def main():
 
     await asyncio.to_thread(http, "DELETE", "/capability/__wb-test-autorun")
 
+    # 26. run reattachment: the panel reopens and picks a live run back up, so a
+    #     missing run must 404 rather than hang the panel waiting for a stream
+    #     that will never come. (Not spawning a real agent here — that costs
+    #     quota and seconds; the streaming path is exercised by hand E2E.)
+    code, data = await asyncio.to_thread(http, "GET", "/agent/run/does-not-exist")
+    results.append(("agents.unknown_run_404", code == 404))
+
+    code, data = await asyncio.to_thread(http, "GET", "/agent/runs")
+    results.append(("agents.runs_listed", code == 200 and isinstance(data.get("runs"), list)))
+
+    code, data = await asyncio.to_thread(http, "POST", "/agent/run/does-not-exist/stop")
+    results.append(("agents.stop_unknown_is_false", code == 200 and data.get("ok") is False))
+
     # --- WS security tests last: they connect their own sockets, which take over
     # --- the hub's single extension slot, so no mock round-trip survives them.
     # 8. a web-page Origin must be rejected on the extension socket

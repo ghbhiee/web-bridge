@@ -87,6 +87,10 @@ async function api(path, opts = {}) {
     return { ok: true, result: { __echo_params: JSON.parse(opts.body || "{}").params } };
   }
   if (path.startsWith("/exec")) return { ok: true, result: "harness exec result" };
+  if (path.startsWith("/agent/run/")) {
+    // a run that is still going, so reattach has something to follow
+    return { ok: true, id: "harness-run", done: false, events: [] };
+  }
   throw new Error("unexpected " + path);
 }
 // streaming agent replies: hand back a canned NDJSON body
@@ -103,6 +107,14 @@ window.fetch = async (u, opts) => {
       { type: "end" },
     ].map((e) => JSON.stringify(e)).join("\\n");
     return new Response(new Blob([lines]), { status: 200, headers: { "X-Run-Id": "harness" } });
+  }
+  if (path.startsWith("/agent/run/") && path.includes("follow=true")) {
+    window.__calls.push({ path });
+    const lines = [
+      { type: "text", text: "（重新接上）这是面板关闭期间 agent 继续产出的答案。" },
+      { type: "done" }, { type: "end" },
+    ].map((e) => JSON.stringify(e)).join("\\n");
+    return new Response(new Blob([lines]), { status: 200 });
   }
   if (path === "/health") return new Response(JSON.stringify({ ok: true, extension_connected: true, version: "harness" }));
   return _fetch(u, opts);

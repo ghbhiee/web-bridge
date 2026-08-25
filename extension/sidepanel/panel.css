@@ -79,6 +79,9 @@ select.mini { max-width: 130px; }
 .filter { display: flex; gap: 6px; align-items: center; margin-bottom: 9px; flex: none; }
 .chip { background: var(--chip); border: 1px solid var(--line); border-radius: 12px; padding: 3px 10px; font-size: 11.5px; cursor: pointer; }
 .chip.active { background: var(--accent); color: #fff; border-color: transparent; }
+.search { width: 100%; border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
+          background: var(--bg); margin-bottom: 8px; font-size: 12px; flex: none; }
+.search:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 .list { display: flex; flex-direction: column; gap: 6px; }
 .item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .item:hover { border-color: var(--accent); }

@@ -24,6 +24,7 @@ const state = {
   session: null,      // agent session to continue, so follow-ups keep context
   agents: { default: "", runners: {} },
   wantAgent: null,    // agent picked last time the panel was open
+  pendingRun: null,   // a run that was still going when the panel closed
 };
 
 // --------------------------------------------------------------------------- //
@@ -73,7 +74,8 @@ async function persist() {
   }));
   try {
     await chrome.storage.local.set({
-      [STORE_KEY]: { turns, session: state.session, agent: $("agent-pick").value },
+      [STORE_KEY]: { turns, session: state.session, agent: $("agent-pick").value,
+                     run: state.run },
     });
   } catch (_) {}
 }
@@ -97,6 +99,7 @@ async function restore() {
   $("messages").querySelectorAll(".save-code").forEach((b) => b.remove());
   $("messages").scrollTop = $("messages").scrollHeight;
   if (saved.agent) state.wantAgent = saved.agent;
+  if (saved.run) state.pendingRun = saved.run;   // picked up after boot
 }
 
 // --------------------------------------------------------------------------- //
@@ -192,6 +195,97 @@ function offerSave(bubble, text) {
   bubble.appendChild(box);
 }
 
+// Reading the run's NDJSON is shared by a fresh ask and by reattaching to one
+// already in flight, so both paths render identically.
+async function consumeStream(resp, bubble, spin) {
+  const body = bubble.querySelector(".body");
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let text = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      if (ev.type === "text") {
+        text += ev.text;
+        body.innerHTML = renderMarkdown(text);
+      } else if (ev.type === "tool") {
+        const t = document.createElement("div");
+        t.className = "tool";
+        t.textContent = "⚙ " + ev.name + " " + JSON.stringify(ev.input || "").slice(0, 90);
+        bubble.insertBefore(t, spin);
+      } else if (ev.type === "done") {
+        if (ev.session_id) state.session = ev.session_id;
+        if (!text && ev.text) { text = ev.text; body.innerHTML = renderMarkdown(text); }
+      } else if (ev.type === "stderr") {
+        console.warn("[agent]", ev.text);
+      } else if (ev.type === "end" && ev.error) {
+        addMsg("err", esc(ev.error));
+      }
+      $("messages").scrollTop = $("messages").scrollHeight;
+    }
+  }
+  return text;
+}
+
+function startBubble() {
+  const bubble = agentBubble();
+  const spin = document.createElement("div");
+  spin.className = "spin";
+  spin.textContent = "运行中…";
+  bubble.appendChild(spin);
+  return { bubble, spin };
+}
+
+// A run outlives the panel: the agent keeps working while the panel is closed.
+// On reopen, pick the answer back up instead of leaving the user with a question
+// and no reply for work that was already paid for.
+async function reattach(runId) {
+  let info;
+  try {
+    info = await api(`/agent/run/${encodeURIComponent(runId)}`);
+  } catch {
+    return;                                  // run expired from the table
+  }
+  const { bubble, spin } = startBubble();
+  if (info.done) {
+    const text = (info.events || []).filter((e) => e.type === "text").map((e) => e.text).join("")
+      || (info.events || []).find((e) => e.type === "done")?.text || "";
+    bubble.querySelector(".body").innerHTML = renderMarkdown(text || "(这次运行没有产出文本)");
+    spin.remove();
+    if (info.error) addMsg("err", esc(info.error));
+    offerSave(bubble, text);
+    state.run = null;
+    persist();
+    return;
+  }
+  spin.textContent = "重新接上正在运行的任务…";
+  $("send").disabled = true;
+  $("stop").hidden = false;
+  try {
+    const resp = await fetch(`${BASE}/agent/run/${encodeURIComponent(runId)}?follow=true`, {
+      headers: { Authorization: "Bearer " + BRIDGE_TOKEN },
+    });
+    const text = await consumeStream(resp, bubble, spin);
+    offerSave(bubble, text);
+  } catch (e) {
+    addMsg("err", "重新接上失败：" + esc(e.message));
+  } finally {
+    spin.remove();
+    $("send").disabled = false;
+    $("stop").hidden = true;
+    state.run = null;
+    persist();
+  }
+}
+
 async function ask(prompt) {
   if (!prompt.trim()) return;
   let full = prompt;
@@ -205,12 +299,7 @@ async function ask(prompt) {
   $("send").disabled = true;
   $("stop").hidden = false;
 
-  const bubble = agentBubble();
-  const body = bubble.querySelector(".body");
-  const spin = document.createElement("div");
-  spin.className = "spin";
-  spin.textContent = "运行中…";
-  bubble.appendChild(spin);
+  const { bubble, spin } = startBubble();
   let text = "";
 
   try {
@@ -225,41 +314,8 @@ async function ask(prompt) {
     });
     if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || "HTTP " + resp.status);
     state.run = resp.headers.get("X-Run-Id");
-
-    // NDJSON: read the body as it arrives rather than awaiting the whole run,
-    // which can take minutes.
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let ev;
-        try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.type === "text") {
-          text += ev.text;
-          body.innerHTML = renderMarkdown(text);
-        } else if (ev.type === "tool") {
-          const t = document.createElement("div");
-          t.className = "tool";
-          t.textContent = "⚙ " + ev.name + " " + JSON.stringify(ev.input || "").slice(0, 90);
-          bubble.insertBefore(t, spin);
-        } else if (ev.type === "done") {
-          if (ev.session_id) state.session = ev.session_id;
-          if (!text && ev.text) { text = ev.text; body.innerHTML = renderMarkdown(text); }
-        } else if (ev.type === "stderr") {
-          console.warn("[agent]", ev.text);
-        } else if (ev.type === "end" && ev.error) {
-          addMsg("err", esc(ev.error));
-        }
-        $("messages").scrollTop = $("messages").scrollHeight;
-      }
-    }
+    persist();                                 // remember it BEFORE the long wait
+    text = await consumeStream(resp, bubble, spin);
     offerSave(bubble, text);
   } catch (e) {
     addMsg("err", esc(e.message));
@@ -268,8 +324,8 @@ async function ask(prompt) {
     $("send").disabled = false;
     $("stop").hidden = true;
     state.run = null;
-    persist();
     if (state.context) { state.context = null; $("ctx-chip").hidden = true; }
+    persist();
   }
 }
 
@@ -354,18 +410,28 @@ function paramField(name, spec) {
     placeholder="${esc(spec.description || name)}">`;
 }
 
+function visibleCaps() {
+  const q = ($("s-search").value || "").trim().toLowerCase();
+  if (!q) return state.caps;
+  return state.caps.filter((c) =>
+    `${c.id} ${c.title || ""} ${c.description || ""} ${(c.match || []).join(" ")}`.toLowerCase().includes(q));
+}
+
 function renderScripts() {
   const list = $("script-list");
-  if (!state.caps.length) {
+  const caps = visibleCaps();
+  if (!caps.length) {
     list.innerHTML = "";
     $("script-empty").hidden = false;
-    $("script-empty").textContent = state.filterSite
-      ? "这个站点还没有专属脚本。切到「全部」看通用能力，或让对话里的 agent 写一个。"
-      : "能力库是空的。";
+    $("script-empty").textContent = $("s-search").value.trim()
+      ? "没有匹配的脚本。"
+      : state.filterSite
+        ? "这个站点还没有专属脚本。切到「全部」看通用能力，或让对话里的 agent 写一个。"
+        : "能力库是空的。";
     return;
   }
   $("script-empty").hidden = true;
-  list.innerHTML = state.caps.map((c) => {
+  list.innerHTML = caps.map((c) => {
     const names = Object.keys(c.params || {});
     const canAuto = c.kind !== "extract";
     return `<div class="item" data-id="${esc(c.id)}">
@@ -485,6 +551,7 @@ function openForm(id, preset) {
   }
 }
 $("new-script").addEventListener("click", () => openForm(null));
+$("s-search").addEventListener("input", renderScripts);
 $("s-cancel").addEventListener("click", closeForm);
 $("s-scope").addEventListener("change", () => ($("s-match").hidden = $("s-scope").value !== "custom"));
 
@@ -710,4 +777,5 @@ $("agent-pick").addEventListener("change", persist);
   await restore();          // before loadAgents, which honours the remembered pick
   await refreshHeader();
   await loadAgents();
+  if (state.pendingRun) { const id = state.pendingRun; state.pendingRun = null; reattach(id); }
 })();

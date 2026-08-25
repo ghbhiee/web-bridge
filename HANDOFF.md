@@ -240,7 +240,9 @@ payload 验证过：变成可见文本，不执行。
 - 三个 CLI 的流式格式不同：claude 是 stream-json、codex 是 JSONL、dsh 是纯文本，
   `parse_line()` 把它们归一成同一串事件（text / tool / done / end）
 - `/agent/ask` 返回 **NDJSON 流**（不是等跑完再返回，这类任务动辄几分钟）；
-  run 存在服务端，侧栏刷新后可以用 `/agent/run/{id}?follow=1` 重新接上
+  run 存在服务端，侧栏**关掉再打开会自动接回正在跑的任务**（存 run id → 重开时
+  `/agent/run/{id}`，没跑完就 `?follow=true` 继续跟）。真机验证过：起一个真 claude 任务、
+  3 秒后断开、重新接上拿到完整答案——和 chatgpt 那条「活干完了结果却丢了」是同一类问题
 - **权限**：探测时默认加上跳过确认的参数（claude `--dangerously-skip-permissions`、
   codex `--dangerously-bypass-approvals-and-sandbox`）——非交互跑不能停在确认提示上。
   这等于**网页里的一句话可以驱动你机器上的 agent 全权干活**，是用户明确选择的取舍；
@@ -302,7 +304,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 40 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 43 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 
