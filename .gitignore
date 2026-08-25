@@ -1,0 +1,18 @@
+# The live bridge token lives here — regenerate locally with bridge/gen_ext_config.sh
+extension/config.js
+
+# Capabilities auto-captured from THIS machine's browsing (see journal.py):
+# they are personal by nature and should not travel with the repo
+capabilities/auto/
+
+# local state, logs, scratch
+bridge/server.log
+bridge/out/
+.harness/
+
+# local bug reports that reference other private projects
+ISSUES-*.md
+
+__pycache__/
+*.py[cod]
+.DS_Store
