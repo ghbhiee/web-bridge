@@ -310,6 +310,27 @@ async def main():
         http, "POST", "/capability/extract-article/autorun", {"autorun": True})
     results.append(("autorun.refused_for_extract", code == 404))
 
+    # an autorun script must receive the SAME filled-in arguments a manual run
+    # gets; injecting a bare {} made one script behave two different ways
+    # depending on whether the user pressed 运行 or just loaded the page
+    meta_def = dict(meta, id="__wb-test-autodefaults", autorun=True,
+                    params={"color": {"type": "string", "default": "#7c3aed",
+                                      "description": "test"}})
+    src_def = "/* @web-bridge-capability\n" + _json.dumps(meta_def) + "\n*/\nreturn args;"
+    await asyncio.to_thread(http, "PUT", "/capability/__wb-test-autodefaults", {"source": src_def})
+    code, data = await asyncio.to_thread(http, "GET", "/capabilities/autorun")
+    entry = next((x for x in data.get("scripts", []) if x["id"] == "__wb-test-autodefaults"), None)
+    results.append(("autorun.carries_declared_defaults",
+                    bool(entry) and entry.get("args", {}).get("color") == "#7c3aed"))
+    await asyncio.to_thread(http, "DELETE", "/capability/__wb-test-autodefaults")
+
+    # a required parameter has nothing to supply it on page load, so the switch
+    # must refuse rather than turn on and quietly do nothing
+    code, data = await asyncio.to_thread(
+        http, "POST", "/capability/collect-list/autorun", {"autorun": True})
+    results.append(("autorun.refused_when_param_required",
+                    code == 404 and "必填参数" in (data.get("detail") or "")))
+
     await asyncio.to_thread(http, "DELETE", "/capability/__wb-test-autorun")
 
     # 26. run reattachment: the panel reopens and picks a live run back up, so a

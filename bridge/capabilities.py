@@ -102,9 +102,20 @@ def autorun_for_registration() -> list[dict]:
     for c in all_caps():
         if not c.get("autorun") or not c.get("body"):
             continue
+        # Fill the declared defaults here. A manual run gets them from
+        # validate_params, and an autorun that injected a bare {} instead made
+        # the same script behave differently depending on how it started —
+        # `args.color` was set when you pressed 运行 and undefined on page load.
+        try:
+            args = validate_params(c, {})
+        except ValueError:
+            # a required parameter has nothing to supply it on page load, so this
+            # script cannot run automatically at all; set_autorun refuses these,
+            # and skipping here covers files edited by hand
+            continue
         out.append({"id": c["id"], "title": c.get("title") or c["id"],
                     "matches": _match_patterns(c), "code": c["body"],
-                    "kind": c.get("kind")})
+                    "args": args, "kind": c.get("kind")})
     return out
 
 
@@ -227,6 +238,16 @@ def set_autorun(cap_id: str, on: bool) -> dict:
         raise KeyError(f"未知能力 '{cap_id}'")
     if meta.get("kind") == "extract" and on:
         raise ValueError("extract 类能力不能 autorun：抽取是按需运行的")
+    if on:
+        # Nothing supplies arguments on a page load, so a required parameter
+        # means this script could only ever fail there. Refusing is clearer than
+        # a switch that turns on and quietly does nothing.
+        missing = [n for n, sp in (meta.get("params") or {}).items()
+                   if (sp or {}).get("required")]
+        if missing:
+            raise ValueError(
+                f"这个能力有必填参数（{'、'.join(missing)}），页面加载时没人传，"
+                f"所以不能自动运行。给它们设默认值，或改成手动运行。")
     path = Path(meta["file"])
     text = path.read_text(encoding="utf-8")
     m = HEADER_RE.search(text)

@@ -654,7 +654,10 @@ async function syncAutorun() {
   const regs = scripts.map((s) => ({
     id: AUTORUN_PREFIX + s.id,
     matches: s.matches,
-    js: [{ code: `(async (args) => {\n${s.code}\n})({}).catch(e => console.warn("[web-bridge] ${s.id}:", e));` }],
+    // the bridge already filled in the declared defaults; injecting {} here made
+    // an autorun script see different args than the same script run by hand
+    js: [{ code: `(async (args) => {\n${s.code}\n})(${JSON.stringify(s.args || {})})` +
+                 `.catch(e => console.warn("[web-bridge] ${s.id}:", e));` }],
     world: "MAIN",
     runAt: "document_idle",
   }));

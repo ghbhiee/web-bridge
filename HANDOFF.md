@@ -259,6 +259,11 @@ payload 验证过：变成可见文本，不执行。
 match pattern，**一个坏 pattern 会让整批注册失败**，所以 `_match_patterns()` 统一转换，
 注册也做了逐个回退。
 
+坑二（真机回归才发现）：**自动运行必须拿到和手动运行一样的参数**。早期版本注入的是
+裸 `{}`，于是同一个脚本按「运行」按钮时 `args.color` 有值、页面加载自动跑时是 undefined，
+静默走进兜底分支。现在 `/capabilities/autorun` 返回已填好默认值的 `args`。
+连带：**有必填参数的能力不允许开自动运行**——页面加载时没人传，开了也只会失败。
+
 ## 自进化：exec 日志 → 自动沉淀成能力
 
 **问题**：能力库能不能长大，以前完全取决于 agent 记不记得调 `save_capability`——没有任何
@@ -305,7 +310,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 43 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 45 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 
