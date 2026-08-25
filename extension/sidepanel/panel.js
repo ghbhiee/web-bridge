@@ -23,6 +23,7 @@ const state = {
   run: null,          // live agent run id
   session: null,      // agent session to continue, so follow-ups keep context
   agents: { default: "", runners: {} },
+  wantAgent: null,    // agent picked last time the panel was open
 };
 
 // --------------------------------------------------------------------------- //
@@ -53,6 +54,49 @@ function toast(text, ms = 1600) {
 async function currentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab || null;
+}
+
+// --------------------------------------------------------------------------- //
+// persistence
+// --------------------------------------------------------------------------- //
+// A side panel is torn down every time it closes (switch window, click away),
+// taking the conversation with it. Chat is the one thing here that is expensive
+// to recreate — the agent already spent time and quota on it — so the transcript,
+// the chosen agent, and the session id survive in chrome.storage.local.
+const STORE_KEY = "wb_panel_state";
+const MAX_KEPT = 40;
+
+async function persist() {
+  const turns = [...$("messages").querySelectorAll(".msg")].slice(-MAX_KEPT).map((m) => ({
+    cls: m.className.replace("msg ", ""),
+    html: m.innerHTML,
+  }));
+  try {
+    await chrome.storage.local.set({
+      [STORE_KEY]: { turns, session: state.session, agent: $("agent-pick").value },
+    });
+  } catch (_) {}
+}
+
+async function restore() {
+  let saved;
+  try {
+    saved = (await chrome.storage.local.get(STORE_KEY))[STORE_KEY];
+  } catch (_) { return; }
+  if (!saved || !(saved.turns || []).length) return;
+  state.session = saved.session || null;
+  $("messages").innerHTML = "";
+  for (const t of saved.turns) {
+    const el = document.createElement("div");
+    el.className = "msg " + t.cls;
+    el.innerHTML = t.html;
+    $("messages").appendChild(el);
+  }
+  // Buttons rendered into restored HTML have no listeners any more; rather than
+  // resurrect half-working ones, mark the transcript as history.
+  $("messages").querySelectorAll(".save-code").forEach((b) => b.remove());
+  $("messages").scrollTop = $("messages").scrollHeight;
+  if (saved.agent) state.wantAgent = saved.agent;
 }
 
 // --------------------------------------------------------------------------- //
@@ -195,6 +239,7 @@ async function ask(prompt) {
     $("send").disabled = false;
     $("stop").hidden = true;
     state.run = null;
+    persist();
     if (state.context) { state.context = null; $("ctx-chip").hidden = true; }
   }
 }
@@ -209,6 +254,7 @@ $("stop").addEventListener("click", async () => {
 $("clear-chat").addEventListener("click", () => {
   $("messages").innerHTML = "";
   state.session = null;
+  chrome.storage.local.remove(STORE_KEY).catch(() => {});
   toast("对话已清空（下一条重新开一个会话）");
 });
 document.querySelectorAll(".chip-btn").forEach((b) =>
@@ -549,9 +595,14 @@ async function loadAgents() {
       .filter(([, r]) => r.available && r.enabled !== false)
       .map(([n, r]) => `<option value="${esc(n)}" ${n === a.default ? "selected" : ""}>${esc(r.label || n)}</option>`);
     $("agent-pick").innerHTML = opts.join("") || '<option value="">没有可用 agent</option>';
+    if (state.wantAgent && a.runners?.[state.wantAgent]?.available) {
+      $("agent-pick").value = state.wantAgent;      // the choice from last time
+    }
     if (!opts.length) $("send").disabled = true;
   } catch (e) {
     $("agent-pick").innerHTML = '<option value="">bridge 未运行</option>';
+    $("send").disabled = true;
+    addMsg("err", "本地 bridge 没在运行，对话不可用。\n终端里跑：python3 ~/cc/web-bridge/bridge/cli.py service status");
   }
 }
 
@@ -565,7 +616,10 @@ $("refresh").addEventListener("click", async () => {
 chrome.tabs.onActivated.addListener(refreshHeader);
 chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === "complete") refreshHeader(); });
 
+$("agent-pick").addEventListener("change", persist);
+
 (async () => {
+  await restore();          // before loadAgents, which honours the remembered pick
   await refreshHeader();
   await loadAgents();
 })();

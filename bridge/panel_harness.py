@@ -63,6 +63,13 @@ window.chrome = {
     update() {}, onActivated: { addListener() {} }, onUpdated: { addListener() {} },
   },
   runtime: { reload() {}, sendMessage: async () => ({ ok: true, registered: 0 }) },
+  // backed by localStorage, not a plain object: chrome.storage.local survives a
+  // panel close, so restore-after-reload has to be testable here too
+  storage: { local: {
+    async get(k) { const v = localStorage.getItem("stub:" + k); return v === null ? {} : { [k]: JSON.parse(v) }; },
+    async set(o) { for (const [k, v] of Object.entries(o)) localStorage.setItem("stub:" + k, JSON.stringify(v)); },
+    async remove(k) { localStorage.removeItem("stub:" + k); },
+  } },
 };
 async function api(path, opts = {}) {
   window.__calls.push({ path, body: opts.body ? JSON.parse(opts.body) : null });
