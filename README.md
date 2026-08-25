@@ -126,7 +126,7 @@ web-bridge reload      # 让扩展从磁盘重载
 ### 能力库
 
 能力 = `capabilities/<id>.js`（文件头一段 JSON 元数据 + 函数体）。写一个文件就多一个
-能力，不用重载扩展，所有 agent 和扩展弹窗立刻能发现。参数在 bridge 侧按元数据校验
+能力，不用重载扩展，所有 agent 和侧栏的脚本库立刻能发现。参数在 bridge 侧按元数据校验
 （必填/类型/枚举/范围），传错会直接回一份可照着改的参数表。
 
 内置（12 个）——通用：`inspect-page`（先探路）、`extract-article`、`extract-tables`、

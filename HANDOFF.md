@@ -1,8 +1,8 @@
 # web-bridge 交接文档
 
 > 新 session 从这里开始。权威状态见 `ROADMAP.md`，本文是**能立刻上手**的浓缩版。
-> 最后更新：2026-08-24（第二轮：参数校验 / 弹窗可运行 / 错误不再说谎 / 新增站点能力 /
-> bridge 已装成 launchd 常驻服务）
+> 最后更新：2026-08-25（侧栏重构：对话 / 脚本库 / 页面三标签，本地 agent 对话，
+> page-beauty 并入能力库；bridge 是 launchd 常驻服务）
 
 ## 这是什么
 
@@ -45,7 +45,7 @@ mcp_server.py            cli.py
 bridge/
   server.py        FastAPI：/exec /capabilities /capability/{id} /adapter /sites /tabs /open /close /reload
   cli.py           wb 命令（自动拉起 server）
-  mcp_server.py    stdio MCP，零依赖，12 个工具
+  mcp_server.py    stdio MCP，零依赖，14 个工具
   capabilities.py  能力注册表：扫目录、解析元数据头、URL 匹配、参数校验、元数据体检
   journal.py       exec 日志 + 归一化签名计数 + 跑满 3 次自动沉淀成能力
   agents.py        本地 agent 运行器（claude -p / codex exec / dsh），探测 + 流式事件
@@ -321,7 +321,7 @@ python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 JS 里的 `\n` 先被三引号字符串吃掉一次、又被 `re.sub` 的替换展开吃掉一次，两次都生成出
 语法错误的 harness。改成读文件后没有任何转义层，只替换 `__FIXTURE__` / `__TAB_URL__`。
 
-**侧栏为什么要 harness**：Chrome 不允许任何扩展注入别的扩展的页面，所以 popup 是唯一
+**侧栏为什么要 harness**：Chrome 不允许任何扩展注入别的扩展的页面，所以侧栏是唯一
 不能被 web-bridge 自己驱动验证的部分。`popup_harness.py` 用**真实的** popup.html/popup.js，
 只桩掉三处扩展专属接缝（config.js 导入、chrome.* 、api()），于是渲染 / 参数表单 /
 readForm 都能在普通浏览器里跑，运行结果回显参数、调用记录挂在 `window.__calls` 上。
