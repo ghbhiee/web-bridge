@@ -29,6 +29,7 @@ const state = {
   userTotal: 0,
   userFilterSite: true,
   editingUser: null,
+  composing: false,   // an IME candidate window is open
   pendingRun: null,   // a run that was still going when the panel closed
 };
 
@@ -207,20 +208,49 @@ function agentBubble() {
 
 // A fenced JS block in the answer is offered as a saveable script — this is the
 // "tell the user they can keep it" step that makes the chat feed the library.
+// A saved script needs a name and the user pressed one button, so derive one:
+// the code's own first comment if it has one, else the request that produced it.
+function scriptName(code, bubble) {
+  const comment = /^\s*\/\/\s*(.+)$/m.exec(code || "");
+  if (comment && comment[1].trim().length > 1) return comment[1].trim().slice(0, 40);
+  const asked = [...$("messages").querySelectorAll(".msg.user")].pop();
+  const t = (asked?.textContent || "").trim().replace(/\s+/g, " ");
+  return (t ? t.slice(0, 30) : "对话里写的脚本") + "（" + hostOf(state.tab?.url) + "）";
+}
+
 function offerSave(bubble, text) {
   const m = /```(?:js|javascript)\n([\s\S]*?)```/.exec(text || "");
   if (!m || m[1].trim().length < 20) return;
   const box = document.createElement("div");
   box.className = "save-code";
-  box.innerHTML = '<button class="mini primary">存成脚本</button><button class="mini ghost">在本页运行</button>';
+  box.innerHTML = '<button class="mini primary">保存到我的脚本库</button>' +
+                  '<button class="mini ghost">在本页运行</button>';
   const [saveBtn, runBtn] = box.querySelectorAll("button");
-  saveBtn.addEventListener("click", () => {
-    // the agent drafted this at the user's request, so it is the user's script:
-    // it goes to 页面 (their own library), not into the agent's capabilities
-    document.querySelector('.tab[data-tab="page"]').click();
-    openUserForm(null);
-    $("u-code").value = m[1].trim();
-    $("u-name").focus();
+  saveBtn.addEventListener("click", async () => {
+    // One click saves. It used to open the 页面 form and make the user press
+    // save a second time; the agent, meanwhile, saved on its own before the user
+    // had decided anything. Now nothing is stored until this button is pressed,
+    // and pressing it is the whole action — so a user can keep refining the
+    // request in chat and only keep the version they like.
+    saveBtn.disabled = true;
+    try {
+      const data = await api("/user-script/new", {
+        method: "PUT",
+        body: JSON.stringify({
+          name: scriptName(m[1], bubble),
+          code: m[1].trim(),
+          matches: [hostOf(state.tab?.url) || "*"],
+          autorun: false,
+          note: "对话里让 agent 写的",
+        }),
+      });
+      saveBtn.textContent = "已保存 ✓";
+      toast(`已存到「页面」→ ${data.script.name}`, 2200);
+      if (document.querySelector(".tab.active")?.dataset.tab === "page") loadUserScripts();
+    } catch (e) {
+      saveBtn.disabled = false;
+      addMsg("err", "保存失败：" + esc(e.message));
+    }
   });
   runBtn.addEventListener("click", async () => {
     runBtn.disabled = true;
@@ -380,7 +410,18 @@ async function ask(prompt) {
 
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); ask($("input").value); });
 $("input").addEventListener("keydown", (e) => {
+  // While an IME is composing, Enter belongs to the candidate window — it picks
+  // the word. Treating it as "send" fired the message mid-word and left the
+  // English spelling behind. keyCode 229 is the older signal for the same thing;
+  // both are checked because browsers disagree about which they set.
+  if (e.isComposing || e.keyCode === 229 || state.composing) return;
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("input").value); }
+});
+$("input").addEventListener("compositionstart", () => (state.composing = true));
+$("input").addEventListener("compositionend", () => {
+  // the composition's own Enter can arrive after this event on some IMEs, so
+  // stay "composing" until the next tick
+  setTimeout(() => (state.composing = false), 0);
 });
 $("stop").addEventListener("click", async () => {
   if (state.run) await api(`/agent/run/${state.run}/stop`, { method: "POST" }).catch(() => {});

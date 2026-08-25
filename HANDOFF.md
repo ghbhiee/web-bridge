@@ -240,10 +240,13 @@ payload 验证过：变成可见文本，不执行。
 
 ### 对话开发脚本 → 存进用户脚本库（这是「对话」标签存在的意义）
 
-用户在对话里说「美化这个页面」，agent 必须**一次做完三步**，简报里是硬性要求：
+用户在对话里说「美化这个页面」，agent 做**两步**（简报里是硬性要求）：
 1. `web_exec` 把脚本**真的跑上去**——只探查不动手，用户眼里什么都没发生
 2. 把 JS **贴在回答里**（```js 块），用户要看得见写了什么
-3. `web_save_page_script` **存进用户的脚本库**（「页面」标签），样式类带 `autorun: true`
+
+**第三步是用户的**：面板在代码块下面给一个「保存到我的脚本库」按钮，**一点即存**
+（不跳转、不用再填一次表单）。agent **不许自己保存**——用户通常还要接着改几轮，
+存不存、什么时候存由他决定。只有用户明确说「保存」时 agent 才用 `web_save_page_script`。
 
 **`web_save_page_script` 是补的洞**：拆分两个库之后，MCP 里只有 `web_save_capability`
 （agent 自己的能力库），**没有任何工具能写进用户脚本库**——agent 想存也存不了，
@@ -251,6 +254,10 @@ payload 验证过：变成可见文本，不执行。
 
 真机验证过整条链：说一句 → 页面立刻变（背景/字号/style 标签都在）→ 代码在回答里 →
 「页面」标签里出现这个脚本 → 刷新自动生效 → 关掉自动运行后刷新完全还原 → 手动运行按钮可用。
+
+**中文输入法**：`Enter` 在候选词窗口开着时属于输入法（选词），当成发送会把半截拼音发出去。
+`keydown` 里先看 `isComposing` / `keyCode === 229` / `compositionstart-end` 三个信号
+（浏览器对前两个的支持不一致，所以都查），`compositionend` 后延一拍再解除。
 
 ### 对话必须告诉 agent 它在哪
 
@@ -343,7 +350,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 51 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 52 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

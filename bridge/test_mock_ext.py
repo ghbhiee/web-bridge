@@ -386,11 +386,16 @@ async def main():
     results.append(("mcp.can_save_page_scripts",
                     "web_save_page_script" in tool_names and "web_page_scripts" in tool_names))
 
-    # the brief must tell the agent to apply + show + save, not just to read
+    # the brief must tell the agent to apply the change and show the code…
     import agents as _agents
     brief = _agents.panel_brief({"url": "https://example.com/", "title": "t"})
     results.append(("agents.brief_demands_delivery",
-                    all(k in brief for k in ("web_exec", "web_save_page_script", "```js"))))
+                    all(k in brief for k in ("web_exec", "```js"))))
+
+    # …and must NOT have it save on its own. Saving is the user's call: the panel
+    # puts a button under the code block, and the user usually wants a few more
+    # rounds of changes before keeping anything.
+    results.append(("agents.brief_forbids_unprompted_save", "不要自己保存" in brief))
 
     # a single oversized line must not kill a run (claude's stream-json puts a
     # whole event on one line; the 64KB default limit ended runs mid-flight)
