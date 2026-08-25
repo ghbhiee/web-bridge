@@ -54,6 +54,7 @@ bridge/
   register_mcp.py  把 MCP 注册进 4 个 agent（幂等）
   mock_ext.py / test_mock_ext.py   无浏览器时的假扩展 + 回归测试（19 项）
   panel_harness.py 把扩展侧栏渲染成普通网页以便测试（见「测试与验证」）
+  harness_stub.js  harness 用的桩（真文件，避免多层转义把 JS 改坏）
   service.py       launchd 服务安装/卸载/重启/状态/日志（wb service 就是它）
 capabilities/      能力库（写一个文件 = 新增能力，无需重载扩展）；auto/ 是自动沉淀出来的
 extension/         MV3 扩展；sidepanel/ 是右侧驻留侧栏（对话 / 脚本库 / 页面 三个标签）
@@ -310,6 +311,10 @@ python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 
 **别直接跑 `test_mock_ext.py`**：它会连上 8790 抢真扩展的槽位，两边互踢。要单独跑就自己
 设好 `WEB_BRIDGE_PORT` / `WEB_BRIDGE_STATE` 指向一次性实例。
+
+桩代码在 `bridge/harness_stub.js`（真文件，不是 Python 字符串）。**这一点是踩了两次才改的**：
+JS 里的 `\n` 先被三引号字符串吃掉一次、又被 `re.sub` 的替换展开吃掉一次，两次都生成出
+语法错误的 harness。改成读文件后没有任何转义层，只替换 `__FIXTURE__` / `__TAB_URL__`。
 
 **侧栏为什么要 harness**：Chrome 不允许任何扩展注入别的扩展的页面，所以 popup 是唯一
 不能被 web-bridge 自己驱动验证的部分。`popup_harness.py` 用**真实的** popup.html/popup.js，

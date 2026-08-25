@@ -52,74 +52,14 @@ def build(url: str, out_dir: Path) -> Path:
     js = js.replace(
         'import { BRIDGE_WS, BRIDGE_TOKEN } from "../config.js";',
         'const BRIDGE_WS = "ws://127.0.0.1:8790/ws/ext", BRIDGE_TOKEN = "stub";')
-    stub = """
-// ---- harness stubs (everything else below is the real panel) ----
-const FIXTURE = %s;
-const TAB_URL = %s;
-window.__calls = [];
-window.chrome = {
-  tabs: {
-    query: async () => [{ id: 1, url: TAB_URL, title: "harness tab" }],
-    update() {}, onActivated: { addListener() {} }, onUpdated: { addListener() {} },
-  },
-  runtime: { reload() {}, sendMessage: async () => ({ ok: true, registered: 0 }) },
-  // backed by localStorage, not a plain object: chrome.storage.local survives a
-  // panel close, so restore-after-reload has to be testable here too
-  storage: { local: {
-    async get(k) { const v = localStorage.getItem("stub:" + k); return v === null ? {} : { [k]: JSON.parse(v) }; },
-    async set(o) { for (const [k, v] of Object.entries(o)) localStorage.setItem("stub:" + k, JSON.stringify(v)); },
-    async remove(k) { localStorage.removeItem("stub:" + k); },
-  } },
-};
-async function api(path, opts = {}) {
-  window.__calls.push({ path, body: opts.body ? JSON.parse(opts.body) : null });
-  if (path === "/health") return { ok: true, extension_connected: true, version: "harness" };
-  if (path === "/agents") return { default: "claude",
-    runners: { claude: { label: "Claude Code", available: true, enabled: true },
-               codex: { label: "Codex", available: true, enabled: true } } };
-  if (path.startsWith("/journal")) return { matches: [
-    { summary: "抓取列表标题", runs: 4, ok_runs: 3, last: "2026-08-25T01:00:00",
-      code: "return [...document.querySelectorAll('h3')].map(e=>e.textContent)" }] };
-  if (path === "/tabs") return { tabs: [{ id: 1, url: TAB_URL, title: "harness tab" }] };
-  if (path.startsWith("/capabilities")) return FIXTURE;
-  if (path.startsWith("/capability/")) {
-    if ((opts.method || "GET") === "GET") return { ok: true, source: "return 1", capability: {} };
-    return { ok: true, result: { __echo_params: JSON.parse(opts.body || "{}").params } };
-  }
-  if (path.startsWith("/exec")) return { ok: true, result: "harness exec result" };
-  if (path.startsWith("/agent/run/")) {
-    // a run that is still going, so reattach has something to follow
-    return { ok: true, id: "harness-run", done: false, events: [] };
-  }
-  throw new Error("unexpected " + path);
-}
-// streaming agent replies: hand back a canned NDJSON body
-const _fetch = window.fetch;
-window.fetch = async (u, opts) => {
-  const path = String(u).replace(/^https?:\/\/[^/]+/, "");
-  if (path === "/agent/ask") {
-    window.__calls.push({ path, body: JSON.parse(opts.body) });
-    const lines = [
-      { type: "start", agent: "claude" },
-      { type: "tool", name: "Read", input: { file: "x" } },
-      { type: "text", text: "这是 harness 里的模拟回答。\\n\\n```js\\nreturn document.title;\\n```" },
-      { type: "done", session_id: "harness-session" },
-      { type: "end" },
-    ].map((e) => JSON.stringify(e)).join("\\n");
-    return new Response(new Blob([lines]), { status: 200, headers: { "X-Run-Id": "harness" } });
-  }
-  if (path.startsWith("/agent/run/") && path.includes("follow=true")) {
-    window.__calls.push({ path });
-    const lines = [
-      { type: "text", text: "（重新接上）这是面板关闭期间 agent 继续产出的答案。" },
-      { type: "done" }, { type: "end" },
-    ].map((e) => JSON.stringify(e)).join("\\n");
-    return new Response(new Blob([lines]), { status: 200 });
-  }
-  if (path === "/health") return new Response(JSON.stringify({ ok: true, extension_connected: true, version: "harness" }));
-  return _fetch(u, opts);
-};
-""" % (json.dumps(caps, ensure_ascii=False), json.dumps(url))
+    # The stub lives in harness_stub.js, not in a Python string. Twice now, a
+    # literal \n inside JS embedded here turned into a real newline (once via the
+    # triple-quoted string, once via re.sub's replacement expansion) and produced
+    # a harness that would not parse. A real file has no escaping layer to get
+    # wrong; only two placeholders are substituted.
+    stub = (HERE / "harness_stub.js").read_text(encoding="utf-8")
+    stub = stub.replace("__FIXTURE__", json.dumps(caps, ensure_ascii=False))
+    stub = stub.replace("__TAB_URL__", json.dumps(url))
     # lambda, not a plain string: re.sub expands escapes in the replacement, so a
     # literal \n in the stub's JS would become a real newline and break the script
     js = re.sub(r"async function api\(path, opts = \{\}\) \{.*?\n\}\n",

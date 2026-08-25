@@ -158,6 +158,42 @@ function renderMarkdown(src) {
   return html.replace(/\u0000B(\d+)\u0000/g, (_m, i) => blocks[Number(i)]);
 }
 
+// What the agent is doing, in words. The raw JSON was unreadable at panel width,
+// and the calls that matter most here are web-bridge's own — "运行能力
+// extract-article" says something; {"capability":"extract-article","params":{}}
+// truncated at 90 characters does not.
+function describeTool(name, input) {
+  const n = String(name || "").replace(/^mcp__[^_]*(?:-[^_]*)*__/, "");
+  const a = input && typeof input === "object" ? input : {};
+  const short = (v, len = 60) => {
+    const t = typeof v === "string" ? v : JSON.stringify(v ?? "");
+    return t.length > len ? t.slice(0, len) + "…" : t;
+  };
+  switch (n) {
+    case "web_exec": return `在页面执行 JS：${short(a.code)}`;
+    case "web_run_capability": return `运行能力 ${a.capability}` +
+      (a.params && Object.keys(a.params).length ? ` ${short(a.params, 40)}` : "");
+    case "web_save_capability": return `保存能力 ${a.capability}`;
+    case "web_capabilities": return a.capability ? `查看能力 ${a.capability}` : "列出可用能力";
+    case "web_journal": return `翻日志${a.host ? "：" + a.host : ""}`;
+    case "web_tabs": return a.filter ? `列出标签页（${a.filter}）` : "列出标签页";
+    case "web_open": return `打开 ${short(a.url, 50)}`;
+    case "web_close_tab": return `关闭标签页 ${short(a.url || a.tab_id, 40)}`;
+    case "web_status": return "查 bridge 状态";
+    case "Read": return `读取 ${short(a.file_path || a.file, 50)}`;
+    case "Write": return `写入 ${short(a.file_path, 50)}`;
+    case "Edit": return `编辑 ${short(a.file_path, 50)}`;
+    case "Bash": return `$ ${short(a.command, 60)}`;
+    case "Glob": case "Grep": return `搜索 ${short(a.pattern, 40)}`;
+    case "ToolSearch": return "查找可用工具";
+    case "WebFetch": case "WebSearch": return `联网 ${short(a.url || a.query, 50)}`;
+    default: {
+      const arg = Object.keys(a).length ? " " + short(a, 50) : "";
+      return n + arg;
+    }
+  }
+}
+
 function agentBubble() {
   const el = addMsg("agent", '<span class="who"></span><span class="body"></span>');
   el.querySelector(".who").textContent = state.agents.default || "agent";
@@ -219,7 +255,8 @@ async function consumeStream(resp, bubble, spin) {
       } else if (ev.type === "tool") {
         const t = document.createElement("div");
         t.className = "tool";
-        t.textContent = "⚙ " + ev.name + " " + JSON.stringify(ev.input || "").slice(0, 90);
+        t.textContent = "⚙ " + describeTool(ev.name, ev.input);
+        t.title = `${ev.name} ${JSON.stringify(ev.input || {})}`;   // full call on hover
         bubble.insertBefore(t, spin);
       } else if (ev.type === "done") {
         if (ev.session_id) state.session = ev.session_id;
