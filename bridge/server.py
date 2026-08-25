@@ -740,6 +740,7 @@ class AskReq(BaseModel):
     agent: Optional[str] = None
     cwd: Optional[str] = None
     session_id: Optional[str] = None       # continue a previous conversation
+    page: Optional[dict] = None            # {url, title} the panel is looking at
 
 
 @app.post("/agent/ask", dependencies=[Depends(require_token)])
@@ -754,7 +755,8 @@ async def agent_ask(req: AskReq):
         raise HTTPException(status_code=400, detail="prompt 不能为空")
     try:
         run = await agents.start(req.agent or "", req.prompt,
-                                 req.cwd or "", req.session_id or "")
+                                 req.cwd or "", req.session_id or "",
+                                 context=req.page)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return StreamingResponse(agents.stream(run), media_type="application/x-ndjson",

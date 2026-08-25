@@ -43,6 +43,7 @@ KNOWN = {
         "full_access_args": ["--dangerously-skip-permissions"],
         "format": "claude-stream-json",
         "resume_args": ["--resume"],
+        "system_prompt_arg": "--append-system-prompt",
     },
     "codex": {
         "label": "Codex",
@@ -63,6 +64,43 @@ KNOWN = {
 }
 
 DEFAULT_CWD = str(Path.home() / "cc")
+
+
+# --------------------------------------------------------------------------- #
+# the briefing every panel-launched agent gets
+# --------------------------------------------------------------------------- #
+# Without this, `claude -p "把当前页面存到 Evernote"` is a bare sentence: the agent
+# has no idea it was launched from a browser side panel or which page the user is
+# looking at. Observed in a real run — it opened with `osascript` to ask Chrome
+# what was on screen, then fetched the page again through a REST API, and never
+# touched web-bridge once. The whole point of this extension is that the page is
+# already open and logged in; the agent has to be told that.
+PANEL_BRIEF = """你正在 web-bridge 的浏览器侧栏里被调用，不是在终端里。
+
+用户此刻正在看的页面：
+  标题：{title}
+  URL：{url}
+
+硬性要求：
+1. 需要读取或操作这个页面时，**必须**走 web-bridge 的 MCP 工具：
+   `web_capabilities`（看这个页面有哪些现成能力）、`web_run_capability`（运行能力，
+   例如 extract-article 抽正文、extract-tables 抽表格）、`web_exec`（在页面 MAIN world
+   执行 JS）。页面是用户已登录的，JS 注入可以直接拿到内容和登录态接口。
+2. **不要**用 osascript / AppleScript 去问浏览器开着什么，URL 就在上面。
+   **不要**绕开这个页面另找 REST API、另开标签页抓“同样”的内容——那可能和用户眼前看到的
+   不是一回事（登录态、权限、动态渲染都可能不同）。
+3. 顺序是：先用 web-bridge 把数据取出来，再做后续处理（存档、总结、发送、写文件…）。
+4. 动作要收敛。优先一两次工具调用拿到数据就往下走，不要长时间翻本地文件和 skill 源码——
+   用户在侧栏里等着看结果。
+"""
+
+
+def panel_brief(context: Optional[dict]) -> str:
+    """The briefing text for a run started from the side panel."""
+    c = context or {}
+    if not c.get("url"):
+        return ""
+    return PANEL_BRIEF.format(title=c.get("title") or "(无标题)", url=c["url"])
 
 
 def detect(cwd: Optional[str] = None, full_access: bool = True) -> dict:
@@ -226,8 +264,13 @@ RUNS: dict[str, Run] = {}
 MAX_RUNS = 40
 
 
-async def start(agent: str, prompt: str, cwd: str = "", session_id: str = "") -> Run:
-    """Spawn an agent and stream its output into a Run."""
+async def start(agent: str, prompt: str, cwd: str = "", session_id: str = "",
+                context: Optional[dict] = None) -> Run:
+    """Spawn an agent and stream its output into a Run.
+
+    `context` carries what the side panel knows and the agent cannot guess —
+    which page the user is looking at, and that web-bridge is how to reach it.
+    """
     conf = roster()
     runners = conf["runners"]
     name = agent or conf["default"]
@@ -247,6 +290,15 @@ async def start(agent: str, prompt: str, cwd: str = "", session_id: str = "") ->
     spec = KNOWN.get(name) or {}
     if session_id and spec.get("resume_args"):
         argv += [*spec["resume_args"], session_id]
+
+    brief = panel_brief(context)
+    if brief:
+        if spec.get("system_prompt_arg"):
+            # claude keeps this out of the transcript, so a resumed conversation
+            # is not re-briefed on every turn
+            argv += [spec["system_prompt_arg"], brief]
+        else:
+            prompt = brief + "\n---\n\n" + prompt
     argv.append(prompt)
 
     run = Run(uuid.uuid4().hex[:12], name, prompt, workdir)

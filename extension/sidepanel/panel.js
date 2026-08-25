@@ -347,6 +347,9 @@ async function ask(prompt) {
         prompt: full,
         agent: $("agent-pick").value || undefined,
         session_id: state.session || undefined,
+        // the agent cannot guess this, and without it one run opened with
+        // osascript to ask Chrome what was on screen
+        page: state.tab ? { url: state.tab.url, title: state.tab.title } : undefined,
       }),
     });
     if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || "HTTP " + resp.status);
