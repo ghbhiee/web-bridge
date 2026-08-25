@@ -37,7 +37,15 @@ function connect() {
   }
   ws.onopen = () => {
     reconnectDelay = 800;
-    send({ type: "hello", info: { ua: navigator.userAgent, ext: "web-bridge", v: "0.1.0" } });
+    // Report the real manifest version and the extension id, not a hardcoded
+    // string: "is the browser running the code on disk?" is the first question
+    // in every diagnosis, and a literal here answers it wrongly forever.
+    const mf = chrome.runtime.getManifest();
+    send({ type: "hello", info: {
+      ua: navigator.userAgent, ext: "web-bridge", v: mf.version,
+      id: chrome.runtime.id, has_side_panel: !!chrome.sidePanel,
+      user_scripts: !!chrome.userScripts,
+    } });
     flush();
     if (pingTimer) clearInterval(pingTimer);
     pingTimer = setInterval(() => send({ type: "ping", t: Date.now() }), 20000);
