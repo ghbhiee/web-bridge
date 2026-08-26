@@ -732,6 +732,21 @@ async def user_script_autorun(script_id: str, req: AutorunReq):
     return {"ok": True, "script": rec}
 
 
+@app.get("/user-script/{script_id}/bookmarklet", dependencies=[Depends(require_token)])
+async def user_script_bookmarklet(script_id: str):
+    """Export as a bookmarklet, so a script can travel to another machine.
+
+    Returns both forms: the `javascript:` URL, and a page carrying it as a
+    draggable link — dragging is the only way to install one in Chrome.
+    """
+    script = user_scripts.get(script_id)
+    if not script:
+        raise HTTPException(status_code=404, detail=f"没有这个脚本：{script_id}")
+    return {"ok": True, "name": script["name"],
+            "url": user_scripts.bookmarklet(script),
+            "html": user_scripts.bookmarklet_page(script)}
+
+
 class RunUserScriptReq(BaseModel):
     url: Optional[str] = None
     timeout_ms: int = 60000

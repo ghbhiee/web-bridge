@@ -644,6 +644,7 @@ function renderUserScripts() {
       <div class="ops">
         <button class="mini primary run">运行</button>
         <button class="mini ghost edit">编辑</button>
+        <button class="mini ghost mark" title="导出成书签，可拖到其它电脑的书签栏">书签</button>
         <label class="switch"><input type="checkbox" class="auto" ${u.autorun ? "checked" : ""}>自动运行</label>
       </div>
     </div>`).join("");
@@ -652,6 +653,7 @@ function renderUserScripts() {
     const u = state.userScripts.find((x) => x.id === item.dataset.id);
     item.querySelector(".run").addEventListener("click", () => runUserScript(item, u));
     item.querySelector(".edit").addEventListener("click", () => openUserForm(u));
+    item.querySelector(".mark").addEventListener("click", () => exportBookmarklet(u));
     item.querySelector(".auto").addEventListener("change", async (e) => {
       try {
         await api(`/user-script/${encodeURIComponent(u.id)}/autorun`, {
@@ -692,6 +694,20 @@ function showUserResult(name, result) {
   $("u-result").hidden = false;
   $("ur-download").href = URL.createObjectURL(new Blob([text ?? ""], { type: "application/json" }));
   $("ur-download").download = name.replace(/\s+/g, "-") + ".json";
+}
+
+async function exportBookmarklet(u) {
+  // Opened as a page rather than copied to the clipboard on purpose: Chrome
+  // refuses a hand-typed or pasted `javascript:` bookmark, so the only way to
+  // install one is to DRAG a real anchor — which means there has to be a page.
+  try {
+    const data = await api(`/user-script/${encodeURIComponent(u.id)}/bookmarklet`);
+    const url = URL.createObjectURL(new Blob([data.html], { type: "text/html" }));
+    await chrome.tabs.create({ url });
+    toast("已打开书签页：把蓝色按钮拖到书签栏", 3000);
+  } catch (e) {
+    toast("导出失败：" + e.message, 2600);
+  }
 }
 
 function openUserForm(u) {

@@ -266,6 +266,15 @@ TOOLS = [
             "url": {"type": "string"}}},
     },
     {
+        "name": "web_delete_page_script",
+        "description": ("Delete one of the user's page scripts by id. Needed when you merge several "
+                        "scripts into one, or replace a script you wrote earlier — without it the "
+                        "old one keeps auto-running alongside the new one."),
+        "inputSchema": {"type": "object", "properties": {
+            "id": {"type": "string", "description": "script id from web_page_scripts"}},
+            "required": ["id"]},
+    },
+    {
         "name": "web_journal",
         "description": ("**Look here before writing JS.** Searches what has already been run on a "
                         "site — one-off scripts from web_exec and capability calls — most-used "
@@ -380,6 +389,12 @@ def call_tool(name, args):
         _ensure_server()
         qs = "?url=" + urllib.parse.quote(args["url"]) if args.get("url") else ""
         return _http("GET", "/user-scripts" + qs)[1]
+    if name == "web_delete_page_script":
+        _ensure_server()
+        code, data = _http("DELETE", f"/user-script/{urllib.parse.quote(args['id'])}")
+        if code != 200:
+            return {"ok": False, "error": data.get("detail")}
+        return data
     if name == "web_journal":
         _ensure_server()
         qs = [f"limit={int(args.get('limit', 10))}"]

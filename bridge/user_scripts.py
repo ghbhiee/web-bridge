@@ -161,6 +161,55 @@ def set_autorun(script_id: str, on: bool) -> dict:
     return save(s)
 
 
+def bookmarklet(script: dict) -> str:
+    """Wrap a script as a `javascript:` URL.
+
+    The stored code is a function body (it may `await`, it may `return`), so it
+    is wrapped in an async IIFE exactly like the injected form — otherwise a
+    top-level `return` is a syntax error the moment the bookmark is clicked.
+    """
+    body = (script.get("code") or "").strip()
+    wrapped = "(async()=>{try{" + body + "}catch(e){alert('脚本出错: '+e.message)}})()"
+    # encodeURIComponent-equivalent: a bookmark URL must survive %, #, ? and
+    # newlines, which are exactly what page-scripts are full of
+    from urllib.parse import quote
+    return "javascript:" + quote(wrapped, safe="")
+
+
+def bookmarklet_page(script: dict) -> str:
+    """A tiny self-contained page whose link can be dragged to the bookmarks bar.
+
+    Dragging is the only way to install a bookmarklet in Chrome — you cannot
+    paste `javascript:` into the address bar and you cannot create it through an
+    API. So the export has to be a page with a real anchor on it.
+    """
+    import html as _html
+    href = bookmarklet(script)
+    name = script.get("name") or "web-bridge 脚本"
+    return f"""<!doctype html><meta charset="utf-8"><title>{_html.escape(name)} · 书签</title>
+<style>
+ body{{font:15px/1.7 -apple-system,"PingFang SC",sans-serif;max-width:720px;margin:48px auto;padding:0 20px;color:#1a1a1a}}
+ h1{{font-size:20px;margin:0 0 6px}} .sub{{color:#6b7280;font-size:13px;margin-bottom:24px}}
+ .drag{{display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:10px 20px;
+        border-radius:8px;font-weight:600;cursor:grab}}
+ .steps{{background:#f6f7f9;border-radius:10px;padding:14px 18px;margin:22px 0;font-size:14px}}
+ code{{background:#eef0f3;border-radius:4px;padding:1px 5px;font-size:13px}}
+ pre{{background:#f6f7f9;border-radius:10px;padding:14px;overflow:auto;font-size:12px;line-height:1.5}}
+</style>
+<h1>{_html.escape(name)}</h1>
+<div class="sub">web-bridge 导出的书签小工具 · 适用范围 {_html.escape(", ".join(script.get("matches") or ["*"]))}</div>
+<a class="drag" href="{_html.escape(href, quote=True)}">↧ 把我拖到书签栏</a>
+<div class="steps">
+  <b>怎么用</b><br>
+  1. 显示书签栏（Chrome: <code>⌘⇧B</code>）<br>
+  2. 把上面的蓝色按钮<b>拖</b>到书签栏——不能复制粘贴，浏览器不允许手输 <code>javascript:</code><br>
+  3. 到目标页面点一下这个书签，脚本就地执行<br>
+  换台电脑就把这个 HTML 文件带过去，或者存进网盘再打开。
+</div>
+<details><summary>脚本源码</summary><pre>{_html.escape(script.get("code") or "")}</pre></details>
+"""
+
+
 def autorun_for_registration() -> list[dict]:
     """User scripts the extension should run on page load."""
     return [{"id": "u:" + s["id"], "title": s["name"], "matches": match_patterns(s),

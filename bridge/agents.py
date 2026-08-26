@@ -108,6 +108,10 @@ PANEL_BRIEF = """你正在 web-bridge 的浏览器侧栏里被调用，不是在
 他的脚本库（`matches` 用当前站点；改样式的可以带 `autorun: true`）。
 `web_save_capability` 是你自己的能力库，**用户要的页面脚本永远不要存到那里**。
 
+用户已有的页面脚本用 `web_page_scripts` 列出（**带完整代码**，别去磁盘上翻文件找），
+要改就用 `web_save_page_script` 带上原 id，合并/替换掉的旧脚本用
+`web_delete_page_script` 删掉——留着它会和新脚本一起自动运行。
+
 写页面脚本的约定：函数体写法，可以 `await`，`return` 的值会显示给用户；
 样式类改动要能重复执行不叠加（先判断元素在不在、加个标记位）。
 

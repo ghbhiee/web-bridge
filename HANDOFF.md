@@ -45,7 +45,7 @@ mcp_server.py            cli.py
 bridge/
   server.py        FastAPI：/exec /capabilities /capability/{id} /adapter /sites /tabs /open /close /reload
   cli.py           wb 命令（自动拉起 server）
-  mcp_server.py    stdio MCP，零依赖，16 个工具
+  mcp_server.py    stdio MCP，零依赖，17 个工具
   capabilities.py  能力注册表：扫目录、解析元数据头、URL 匹配、参数校验、元数据体检
   journal.py       exec 日志 + 归一化签名计数 + 跑满 3 次自动沉淀成能力
   agents.py        本地 agent 运行器（claude -p / codex exec / dsh），探测 + 流式事件
@@ -260,6 +260,12 @@ payload 验证过：变成可见文本，不执行。
 真机验证过整条链：说一句 → 页面立刻变（背景/字号/style 标签都在）→ 代码在回答里 →
 「页面」标签里出现这个脚本 → 刷新自动生效 → 关掉自动运行后刷新完全还原 → 手动运行按钮可用。
 
+**导出书签**：「页面」标签每条脚本有个「书签」按钮 → `GET /user-script/{id}/bookmarklet`
+生成 `javascript:` URL 和一个带**可拖拽链接**的页面。必须是拖的：Chrome 不允许手输或粘贴
+`javascript:` 书签，也没有 API 能建，所以导出只能是一个页面。存的代码是函数体
+（可能 `await`、可能顶层 `return`），包成 async IIFE 才不会一点就语法错误。
+这样脚本可以带到别的电脑上用。
+
 **中文输入法**：`Enter` 在候选词窗口开着时属于输入法（选词），当成发送会把半截拼音发出去。
 `keydown` 里先看 `isComposing` / `keyCode === 229` / `compositionstart-end` 三个信号
 （浏览器对前两个的支持不一致，所以都查），`compositionend` 后延一拍再解除。
@@ -355,7 +361,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 54 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 56 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

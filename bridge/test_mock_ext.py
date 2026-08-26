@@ -391,6 +391,20 @@ async def main():
     same_id = [x for x in data.get("scripts", []) if x["id"] == uid]
     results.append(("user_scripts.update_does_not_duplicate", len(same_id) == 1))
 
+    # a script has to be able to leave this machine: export it as a bookmarklet
+    code, data = await asyncio.to_thread(http, "GET", f"/user-script/{uid}/bookmarklet")
+    url = data.get("url", "")
+    results.append(("user_scripts.bookmarklet_export",
+                    code == 200 and url.startswith("javascript:")
+                    and "\n" not in url and " " not in url        # must survive a bookmark URL
+                    and 'class="drag"' in data.get("html", "")))   # draggable, the only way to install
+
+    # the agent needs a way to remove a script it replaced — without one it
+    # renamed a script to "(可删除)" and left it auto-running
+    import mcp_server as _mcp2
+    results.append(("mcp.can_delete_page_scripts",
+                    "web_delete_page_script" in [t["name"] for t in _mcp2.TOOLS]))
+
     await asyncio.to_thread(http, "DELETE", f"/user-script/{uid}")
 
     # 28. the chat-to-library loop the panel exists for: an agent writes a page
