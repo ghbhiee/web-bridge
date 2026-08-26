@@ -200,6 +200,31 @@ TOOLS = [
             "wait_seconds": {"type": "number", "default": 0}}},
     },
     {
+        "name": "web_find_tool",
+        "description": ("**Do this before writing a scraper.** Finds an existing tool by what you "
+                        "are trying to DO, ranked by relevance and by whether it has actually "
+                        "worked before. Unlike web_capabilities it is not limited to the page you "
+                        "are on: a tool built for another site still surfaces when it does what you "
+                        "need — pass `url` and tools for that page get a boost, not a monopoly. "
+                        "Returns a handful of one-line entries, not a catalogue."),
+        "inputSchema": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "what you are trying to do, in your own words"},
+            "url": {"type": "string", "description": "the page you are working on (a boost, optional)"},
+            "limit": {"type": "integer", "default": 5}}},
+    },
+    {
+        "name": "web_rate_tool",
+        "description": ("Report that a tool did or did not do its job. The journal already sees "
+                        "whether a script threw; it cannot see that the answer was wrong or "
+                        "useless, and you can. Repeated bad reports sink a tool in web_find_tool's "
+                        "ranking, so a plausible-but-broken tool stops being suggested."),
+        "inputSchema": {"type": "object", "properties": {
+            "id": {"type": "string", "description": "capability id"},
+            "ok": {"type": "boolean", "description": "true if it did the job"},
+            "note": {"type": "string", "description": "one line on what was wrong, if it was not"}},
+            "required": ["id", "ok"]},
+    },
+    {
         "name": "web_capabilities",
         "description": ("**Start here for page work.** Lists what can be done on a page: ready-made "
                         "capabilities for extracting data, automating tasks, and restyling/re-laying-out "
@@ -350,6 +375,21 @@ def call_tool(name, args):
         w = float(args.get("wait_seconds", 0))
         return _http("GET", f"/result/{urllib.parse.quote(args['request_id'])}?wait={w}",
                      timeout=w + 20)[1]
+    if name == "web_find_tool":
+        _ensure_server()
+        qs = [f"limit={int(args.get('limit', 5))}"]
+        if args.get("query"):
+            qs.append("q=" + urllib.parse.quote(args["query"]))
+        if args.get("url"):
+            qs.append("url=" + urllib.parse.quote(args["url"]))
+        return _http("GET", "/tools/search?" + "&".join(qs))[1]
+    if name == "web_rate_tool":
+        _ensure_server()
+        code, data = _http("POST", f"/tools/{urllib.parse.quote(args['id'])}/feedback",
+                           {"ok": bool(args.get("ok")), "note": args.get("note", "")})
+        if code != 200:
+            return {"ok": False, "error": data.get("detail")}
+        return data
     if name == "web_capabilities":
         _ensure_server()
         if args.get("capability"):

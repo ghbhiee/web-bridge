@@ -44,6 +44,7 @@ import journal
 import agents
 import user_scripts
 import results
+import toolsearch
 import service
 # Under pythonw.exe (how the Windows autostart runs us) there is no console and
 # sys.stdout / sys.stderr are None — the first print() then kills the server and
@@ -478,15 +479,17 @@ def _tools_for_host_hint(url: str) -> Optional[dict]:
     if not url:
         return None
     try:
-        site = [c for c in capabilities.for_url(url) if c.get("match") != ["*"]]
+        site = [t for t in toolsearch.search("", url, limit=3, include_generic=False)
+                if t["on_this_page"]]
     except Exception:  # noqa: BLE001
         return None
     if not site:
         return None
     return {
-        "note": "这个页面有专门为它写的 Agent Tools，下次可以直接 web_run_capability，不用自己写 JS",
-        "tools": [{"id": c["id"], "title": c.get("title") or "",
-                   "params": list((c.get("params") or {}).keys())} for c in site[:5]],
+        "note": "这个页面有专门为它写的 Agent Tools，下次可以直接 web_run_capability，不用自己写 JS；"
+                "按意图找工具用 web_find_tool",
+        "tools": [{"id": t["id"], "title": t["title"], "params": t["params"],
+                   "runs": t["runs"]} for t in site],
     }
 
 
@@ -972,6 +975,35 @@ async def agent_runs():
 @app.post("/agent/run/{run_id}/stop", dependencies=[Depends(require_token)])
 async def agent_stop(run_id: str):
     return {"ok": agents.stop(run_id)}
+
+
+@app.get("/tools/search", dependencies=[Depends(require_token)])
+async def tools_search(q: str = "", url: str = "", limit: int = 5, generic: bool = True):
+    """Which tool fits this intent — ranked, and short on purpose.
+
+    `url` boosts tools built for the current page but never hides the others: a
+    tool is relevant because of what it does, not because of where the user is
+    standing when they ask.
+    """
+    return {"ok": True, "query": q,
+            "tools": toolsearch.search(q, url, max(1, min(limit, 10)), generic)}
+
+
+class ToolFeedbackReq(BaseModel):
+    ok: bool
+    note: str = ""
+
+
+@app.post("/tools/{cap_id}/feedback", dependencies=[Depends(require_token)])
+async def tool_feedback(cap_id: str, req: ToolFeedbackReq):
+    """Say whether a tool actually did the job.
+
+    The journal sees whether a script threw; it cannot see that the answer was
+    wrong. Whoever used it can, and repeated thumbs-down sink it in the ranking.
+    """
+    if not capabilities.get(cap_id):
+        raise HTTPException(status_code=404, detail=f"未知能力 '{cap_id}'")
+    return {"ok": True, "feedback": toolsearch.record_feedback(cap_id, req.ok, req.note)}
 
 
 @app.get("/journal/stats", dependencies=[Depends(require_token)])

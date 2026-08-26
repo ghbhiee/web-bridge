@@ -231,6 +231,32 @@ MCP 工具名：`web_capabilities`（带 `capability` 参数则返回单个能�
 几种行内格式**——从页面文本到活markup 没有通路。真机用 `<img onerror>` / `<script>`
 payload 验证过：变成可见文本，不执行。
 
+### 按意图找工具（`bridge/toolsearch.py`）
+
+`wb find "把网页表格存成 JSON"` / MCP `web_find_tool` / `GET /tools/search?q=&url=`
+
+**三件事一起解决：**
+
+1. **网址不再是过滤器，只是加权**。以前 `capabilities.for_url()` 只按 `match` 筛，
+   于是站在 google.com 上问「查电影在哪些国家能看」什么都搜不到——用户的**意图**
+   输给了他**碰巧站在哪**。现在 URL 命中只是 ×1.6 的加权，别的站点的工具照样能排上来。
+2. **跨语言**。`table` 和 `表格` 是同一个问题：内置同义词表 + CJK 单字/二元切分
+   （中文没有空格，按词切会漏）。
+3. **排序看战绩**。`relevance × 质量 × 时新` —— 质量用 Laplace 平滑的成功率
+   （一次失败不至于判死刑，一次成功也不至于封神）+ 用量对数。
+   跑得多又成功的工具往前排，一直失败的往后沉。
+
+**淘汰机制**：`web_rate_tool {id, ok:false, note}`。日志只知道脚本有没有抛异常，
+**不知道答案对不对**——只有用它的模型知道。差评计入质量因子，实测 4 次差评把
+`extract-tables` 从 7.29 压到 5.47。
+
+**上下文成本是硬约束**：只回 top-N（默认 5），每条一行摘要 + 参数名，不回代码、不回全表。
+简报里也只放排名前 4 的本页工具。
+
+**相关性后端可插拔**：默认内置词法打分（无依赖、Windows 能跑）；装了 qmd 且
+`WEB_BRIDGE_QMD=1` 时改用它的混合检索。**没有做成硬依赖**：qmd 是 homebrew 原生二进制，
+Windows 那边装不上，而这个语料只有十几条短描述，词法打分已经够用。
+
 **怎么让 Agent Tools 更容易命中**（实测有效的顺序）：
 0. **hint 必须放在所有调用方都看得到的地方**。简报只对**侧栏发起**的 run 生效，
    而实际重复造轮子发生在 dsh / 终端里的 MCP 客户端——那条路没有简报。
@@ -447,7 +473,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 74 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 78 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

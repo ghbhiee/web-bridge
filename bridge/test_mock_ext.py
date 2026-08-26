@@ -438,6 +438,42 @@ async def main():
                     and not _j6.looks_trivial(
                         'document.querySelectorAll(".ad").forEach(e=>e.remove()); return {n:1}')))
 
+    # Retrieval by intent, not by which URL is open. Looking tools up through
+    # `match` alone meant a tool for another site was invisible even when it did
+    # exactly what was asked — the user's intent lost to where they were standing.
+    import toolsearch as _ts
+    code, data = await asyncio.to_thread(
+        http, "GET", "/tools/search?q=" + urllib.parse.quote("表格 存成 JSON") + "&limit=3")
+    ids = [t["id"] for t in data.get("tools", [])]
+    results.append(("toolsearch.ranks_by_intent",
+                    code == 200 and ids and ids[0] == "extract-tables"))
+
+    # the same question in the other language must find the same tool
+    _, data_en = await asyncio.to_thread(http, "GET", "/tools/search?q=table&limit=3")
+    results.append(("toolsearch.crosses_languages",
+                    [t["id"] for t in data_en.get("tools", [])][:1] == ["extract-tables"]))
+
+    # a tool for another site still surfaces; the url only boosts
+    _, off = await asyncio.to_thread(
+        http, "GET", "/tools/search?q=" + urllib.parse.quote("提取表格")
+        + "&url=" + urllib.parse.quote("https://unrelated-site.test/") + "&limit=5")
+    results.append(("toolsearch.url_boosts_not_filters",
+                    any(t["id"] == "extract-tables" for t in off.get("tools", []))))
+
+    # and a tool reported as not doing its job must sink
+    before = next((t["score"] for t in data.get("tools", []) if t["id"] == "extract-tables"), 0)
+    for _ in range(4):
+        await asyncio.to_thread(http, "POST", "/tools/extract-tables/feedback",
+                                {"ok": False, "note": "test"})
+    _, after_data = await asyncio.to_thread(
+        http, "GET", "/tools/search?q=" + urllib.parse.quote("表格 存成 JSON") + "&limit=3")
+    after = next((t["score"] for t in after_data.get("tools", []) if t["id"] == "extract-tables"), 0)
+    results.append(("toolsearch.bad_reports_demote", before > 0 and after < before))
+    try:
+        (_ts.journal.STATE_DIR / "tool-feedback.json").unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
     # A briefing only reaches side-panel runs. The reinventing was happening in a
     # terminal MCP client, which never sees one — eleven hand-written scripts on
     # a site whose capability was sitting right there, discovery never called.

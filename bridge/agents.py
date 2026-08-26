@@ -144,25 +144,27 @@ def available_tools_block(url: str) -> str:
     notice a tool it was handed.
     """
     try:
-        import capabilities
-        import user_scripts
-        caps = capabilities.for_url(url)
+        import toolsearch
+        site = [t for t in toolsearch.search("", url, limit=4, include_generic=False)
+                if t["on_this_page"]]
     except Exception:  # noqa: BLE001
         return ""
-    site = [c for c in caps if c.get("match") != ["*"]]
     if not site:
         return ""
+    # Ranked and capped: a briefing is context the user pays for on every turn,
+    # so this lists the few best rather than everything that matches.
     lines = ["", "**这个页面已经有现成的 Agent Tools，优先用它们，别重写：**"]
-    for c in site[:8]:
-        params = ", ".join((c.get("params") or {}).keys())
-        lines.append(f"- `{c['id']}` — {c.get('title') or ''}"
-                     f"{'（参数：' + params + '）' if params else ''}")
-        desc = (c.get("description") or "").strip().replace("\n", " ")
-        if desc:
-            lines.append(f"    {desc[:150]}")
-    lines.append("")
-    lines.append("用 `web_run_capability` 调它们。确实不合用再自己写——"
-                 "写完如果这活儿以后还会做，问用户要不要存成 Agent Tool。")
+    for t in site:
+        params = ", ".join(t["params"])
+        used = f"（用过 {t['runs']} 次）" if t["runs"] else ""
+        lines.append(f"- `{t['id']}` — {t['title']}{used}"
+                     f"{'  参数：' + params if params else ''}")
+        if t["summary"]:
+            lines.append(f"    {t['summary']}")
+    lines += ["",
+              "用 `web_run_capability` 调。**别的页面的工具也可能正合用**——"
+              "按你要做的事去搜：`web_find_tool`（它按相关性和过往成功率排序，不受当前网址限制）。",
+              "工具跑了但结果不对，用 `web_rate_tool` 标一下，以后它就会往后排。"]
     return "\n".join(lines)
 
 

@@ -219,6 +219,36 @@ def cmd_open(args):
     return 0 if code == 200 else 1
 
 
+def cmd_find(args):
+    """Search tools by intent — what the agent is told to do before writing JS."""
+    if not _need_server(args):
+        return 2
+    qs = [f"limit={args.limit}"]
+    if args.query:
+        qs.append("q=" + urllib.parse.quote(args.query))
+    if args.url:
+        qs.append("url=" + urllib.parse.quote(args.url))
+    code, d = _http("GET", "/tools/search?" + "&".join(qs))
+    if code != 200:
+        _emit(d, args.json); return 1
+    if args.json:
+        print(json.dumps(d, ensure_ascii=False, indent=2)); return 0
+    tools = d.get("tools") or []
+    if not tools:
+        print("没有匹配的工具"); return 0
+    for t in tools:
+        here = " · 本页专用" if t["on_this_page"] else ""
+        used = f" · 用过 {t['ok_runs']}/{t['runs']} 次成功" if t["runs"] else " · 还没用过"
+        bad = f" · 被标记不好用 {t['reported_bad']} 次" if t.get("reported_bad") else ""
+        print(f"\n{t['score']:6.2f}  {t['id']}{here}{used}{bad}")
+        print(f"        {t['title']}")
+        if t["summary"]:
+            print(f"        {t['summary']}")
+        if t["params"]:
+            print(f"        参数: {', '.join(t['params'])}")
+    return 0
+
+
 def cmd_stats(args):
     """Answers 'are my saved tools being used, or is it rewriting JS every time'."""
     if not _need_server(args):
@@ -683,6 +713,12 @@ def build_parser():
 
     cl = sub.add_parser("close", help="关闭标签页（按 URL 片段或 tab id）")
     cl.add_argument("target", help="URL 片段或 tab id"); cl.set_defaults(func=cmd_close)
+    fd = sub.add_parser("find", help="按「我要干什么」搜工具（写 JS 之前先跑这个）")
+    fd.add_argument("query", nargs="?", default="", help="要做的事，用自己的话说")
+    fd.add_argument("--url", default="", help="当前页面（加权，不过滤）")
+    fd.add_argument("--limit", type=int, default=5)
+    fd.set_defaults(func=cmd_find)
+
     st2 = sub.add_parser("stats", help="工具复用率：存下来的能力到底有没有被用上")
     st2.add_argument("--days", type=int, default=7)
     st2.add_argument("--host", default="", help="只看某个站点")
