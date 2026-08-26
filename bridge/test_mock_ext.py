@@ -413,6 +413,15 @@ async def main():
     results.append(("capabilities.expose_updated_time",
                     bool(caps) and all(c.get("updated") for c in caps)))
 
+    # both libraries must be reachable from a conversation. When only the page
+    # library had a tool, "把上面这个创建到脚本库" put a capability meant for the
+    # agent into the user's page scripts — the brief now routes by who it is for.
+    import agents as _agents4
+    brief4 = _agents4.panel_brief({"url": "https://example.com/", "title": "t"})
+    results.append(("agents.brief_routes_both_libraries",
+                    "web_save_page_script" in brief4 and "web_save_capability" in brief4
+                    and "Agent Tools" in brief4 and "Page Tools" in brief4))
+
     # a whole library must be able to move to another machine, and importing
     # must never quietly overwrite work that is already here
     code, bundle = await asyncio.to_thread(http, "GET", "/user-scripts/export")

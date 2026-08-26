@@ -18,8 +18,8 @@
 
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="chat" role="tab">对话</button>
-    <button class="tab" data-tab="page" role="tab">页面</button>
-    <button class="tab" data-tab="scripts" role="tab">脚本库</button>
+    <button class="tab" data-tab="page" role="tab">Page Tools</button>
+    <button class="tab" data-tab="scripts" role="tab">Agent Tools</button>
   </nav>
 
   <!-- ================= 对话 ================= -->
@@ -56,7 +56,7 @@
 
   <!-- ================= 脚本库：agent 的能力（只读） ================= -->
   <section class="pane" id="pane-scripts">
-    <p class="lede">这是 <b>agent 自己用的能力</b>——它写下并复用的本事。你不用读代码，
+    <p class="lede"><b>给 agent 用的</b>工具——它写下并复用的本事。你不用读代码，
       看名字就知道它会做什么、用过多少次。想让它做新的事，直接在「对话」里说。</p>
     <input id="s-search" class="search" type="search" placeholder="搜索能力" />
     <div class="filter">
@@ -75,12 +75,12 @@
     <div class="filter">
       <button id="u-site" class="chip active">这个站点</button>
       <button id="u-all" class="chip">全部</button>
-      <button id="u-new" class="mini primary right">＋ 新建脚本</button>
+      <button id="u-new" class="mini primary right">＋ 新建</button>
       <button id="u-export" class="mini ghost" title="导出全部脚本为 JSON，可在别的机器导入">导出</button>
       <button id="u-import" class="mini ghost" title="从导出的 JSON 恢复">导入</button>
       <input id="u-file" type="file" accept=".json,application/json" hidden />
     </div>
-    <p class="lede">你自己的页面脚本：贴一段 JS 就能在这个页面上跑，或开自动运行。
+    <p class="lede"><b>给人用的</b>页面工具：贴一段 JS 就能在这个页面上跑，或开自动运行。
       不会写？下面有提示词模板可以复制给任意 AI，也可以在「对话」里让 agent 帮你写。</p>
 
     <div id="user-list" class="list"></div>

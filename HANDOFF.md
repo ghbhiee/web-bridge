@@ -223,13 +223,22 @@ MCP 工具名：`web_capabilities`（带 `capability` 参数则返回单个能�
 | 标签 | 干什么 |
 |---|---|
 | **对话** | 调用**本机的 agent**（claude / codex / dsh）。`＋页面内容`把当前页正文读进上下文；agent 回答里的 ```js 代码块会给出「存成脚本 / 在本页运行」两个按钮——对话生成的脚本由此进入能力库 |
-| **页面** | **用户自己的脚本**：贴一段 JS 就能在这页跑，可开自动运行；带 6 个提示词模板（复制给任意 AI 用，用户不一定用这里的 agent 写）；也可以一键转到对话让 agent 帮写 |
-| **脚本库** | **agent 自己的能力**，只读。只给名字 + 说明 + 用过几次，**不显示代码**——这是给用户看「它会做什么、在这个站做过什么」的清单，不是让用户读机器写给机器的代码 |
+| **Page Tools** | **用户自己的脚本**：贴一段 JS 就能在这页跑，可开自动运行；带 6 个提示词模板（复制给任意 AI 用，用户不一定用这里的 agent 写）；也可以一键转到对话让 agent 帮写 |
+| **Agent Tools** | **agent 自己的能力**，只读。只给名字 + 说明 + 用过几次，**不显示代码**——这是给用户看「它会做什么、在这个站做过什么」的清单，不是让用户读机器写给机器的代码 |
 
 对话里 agent 的 markdown 由 `renderMarkdown()` 渲染（无依赖，CSP 严格）。
 **安全**：agent 的回答里可能夹带它读到的网页内容，所以**先整体 HTML 转义、再放回有限的
 几种行内格式**——从页面文本到活markup 没有通路。真机用 `<img onerror>` / `<script>`
 payload 验证过：变成可见文本，不执行。
+
+**标签名就是它们的区别**：`Page Tools` = 给人用的，`Agent Tools` = 给 agent 用的。
+两个都叫「脚本库」的时候，用户说「存到脚本库」根本没法区分——真实踩过：用户要把一个
+能力存给 agent 复用，agent 只有 `web_save_page_script` 一个出口，存进了用户的页面脚本。
+现在对话里的代码块下面有**两个按钮**（存为 Page Tool / 存为 Agent Tool），
+简报里也按「给谁用」分流两个工具，分不清就问。
+
+存为 Agent Tool 时面板自己生成能力元数据头（id 必须是 ascii——id 就是文件名，
+`capabilities.save()` 会把非 `[A-Za-z0-9_.-]` 全替换成横线，中文标题会变成一串横线）。
 
 **两个库是分开的，这是设计而不是遗漏**：`capabilities/` 是 agent 写给 agent 用的（带参数
 声明、kind、给 agent 判断用的描述），`user-scripts.json` 是用户自己的（代码就是全部意义，
@@ -409,7 +418,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 66 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 67 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

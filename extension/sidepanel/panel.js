@@ -270,6 +270,35 @@ function scriptName(code, bubble) {
   return (t ? t.slice(0, 30) : "对话里写的脚本") + "（" + hostOf(state.tab?.url) + "）";
 }
 
+// A capability is a JS file with a metadata header the bridge parses. The panel
+// can write that header itself, so "save this for the agent" does not require
+// the user to hand-author metadata.
+async function saveAsAgentTool(code, bubble) {
+  const summary = (/^\s*\/\/\s*说明[：:]\s*(.+)$/m.exec(code) || [])[1]?.trim() || "";
+  const host = hostOf(state.tab?.url) || "";
+  const title = scriptName(code, bubble).replace(new RegExp("（" + host + "）$"), "").trim();
+  // The id becomes a FILENAME, and capabilities.save() replaces anything outside
+  // [A-Za-z0-9_.-] with a dash — a Chinese title turned into a row of hyphens.
+  // Keep the id ascii and let the title carry the readable name.
+  const slug = (title.match(/[a-z0-9]+/gi) || []).join("-").slice(0, 16);
+  const id = ("t-" + (host.replace(/[^a-z0-9]+/gi, "-") || "page") +
+              (slug ? "-" + slug : "") + "-" + Date.now().toString(36).slice(-4)).toLowerCase();
+  const meta = {
+    id, title,
+    description: (summary || title) +
+      "（对话里让 " + ($("agent-pick").value || "agent") + " 写的，存为 Agent Tool）",
+    kind: /return\s|JSON|提取|抓取/.test(code) ? "extract" : "automate",
+    match: host ? [host] : ["*"],
+    params: {},
+    author: $("agent-pick").value || "panel",
+  };
+  const source = "/* @web-bridge-capability\n" + JSON.stringify(meta, null, 2) + "\n*/\n" + code;
+  const data = await api(`/capability/${encodeURIComponent(id)}`, {
+    method: "PUT", body: JSON.stringify({ source }),
+  });
+  return data.capability || meta;
+}
+
 function offerSave(bubble, text) {
   const m = /```(?:js|javascript)\n([\s\S]*?)```/.exec(text || "");
   if (!m || m[1].trim().length < 20) return;
@@ -281,13 +310,32 @@ function offerSave(bubble, text) {
   // default has to be "update the one I saved", not "make another copy". Saving
   // used to always create, leaving a pile of near-identical scripts behind.
   const saved = state.savedScript;
+  // Two destinations, because they are for two different users: a Page Tool is
+  // the user's own (they run it, edit it, drag it to a bookmark), an Agent Tool
+  // is a capability the agent discovers and calls later. Asking "save" without
+  // asking "for whom" is what sent a capability into the wrong library.
   box.innerHTML =
-    `<button class="mini primary">${saved ? "更新「" + esc(saved.name) + "」" : "保存到我的脚本库"}</button>` +
-    `<button class="mini ghost">在本页运行</button>` +
-    (saved ? '<button class="mini ghost asnew">另存为新脚本</button>' : "");
-  const saveBtn = box.querySelector(".mini.primary");
-  const runBtn = box.querySelectorAll("button")[1];
+    `<button class="mini primary save-page">${saved ? "更新「" + esc(saved.name) + "」" : "存为 Page Tool"}</button>` +
+    `<button class="mini ghost save-agent">存为 Agent Tool</button>` +
+    `<button class="mini ghost run-here">在本页运行</button>` +
+    (saved ? '<button class="mini ghost asnew">另存为新的 Page Tool</button>' : "");
+  const saveBtn = box.querySelector(".save-page");
+  const agentBtn = box.querySelector(".save-agent");
+  const runBtn = box.querySelector(".run-here");
   const asNewBtn = box.querySelector(".asnew");
+
+  agentBtn.addEventListener("click", async () => {
+    agentBtn.disabled = true;
+    try {
+      const rec = await saveAsAgentTool(code, bubble);
+      agentBtn.textContent = "已存为 Agent Tool ✓";
+      toast(`已存到 Agent Tools → ${rec.id}`, 2600);
+      if (document.querySelector(".tab.active")?.dataset.tab === "scripts") loadScripts();
+    } catch (e) {
+      agentBtn.disabled = false;
+      addMsg("err", "存为 Agent Tool 失败：" + esc(e.message));
+    }
+  });
 
   async function store(asNew) {
     const target = !asNew && state.savedScript ? state.savedScript.id : "new";
@@ -316,7 +364,7 @@ function offerSave(bubble, text) {
     try {
       const rec = await store(false);
       saveBtn.textContent = state.savedScript ? "已更新 ✓" : "已保存 ✓";
-      toast(`已存到「页面」→ ${rec.name}`, 2200);
+      toast(`已存到 Page Tools → ${rec.name}`, 2200);
     } catch (e) {
       saveBtn.disabled = false;
       addMsg("err", "保存失败：" + esc(e.message));
@@ -328,7 +376,7 @@ function offerSave(bubble, text) {
     try {
       const rec = await store(true);
       asNewBtn.textContent = "已另存 ✓";
-      toast(`已新建 → ${rec.name}`, 2200);
+      toast(`已新建 Page Tool → ${rec.name}`, 2200);
     } catch (e) {
       asNewBtn.disabled = false;
       addMsg("err", "保存失败：" + esc(e.message));
