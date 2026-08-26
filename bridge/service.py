@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import locale
 import os
 import plistlib
 import subprocess
@@ -39,13 +40,16 @@ LABEL = "com.web-bridge.server"
 PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
 LOG = Path.home() / "Library/Logs/web-bridge.log"
 ERR = Path.home() / "Library/Logs/web-bridge.err.log"
-DOMAIN = f"gui/{os.getuid()}"
+DOMAIN = f"gui/{os.getuid()}" if hasattr(os, "getuid") else ""
 SERVICE = f"{DOMAIN}/{LABEL}"
 
 
 def _run(*args: str) -> tuple[int, str]:
-    p = subprocess.run(args, capture_output=True, text=True)
-    return p.returncode, (p.stdout + p.stderr).strip()
+    # errors="replace": Windows console tools (netstat) emit the OEM codepage,
+    # which is not utf-8 — a strict decode raises and leaves stdout None.
+    p = subprocess.run(args, capture_output=True, text=True,
+                       encoding=locale.getpreferredencoding(False), errors="replace")
+    return p.returncode, ((p.stdout or "") + (p.stderr or "")).strip()
 
 
 def _python() -> str:
@@ -216,6 +220,21 @@ def _pythonw() -> str:
     return str(noconsole if noconsole.exists() else exe)
 
 
+def win_log() -> Path:
+    """Windows counterpart of ~/Library/Logs/web-bridge.log.
+
+    Public because server.py redirects its own streams here — one definition of
+    where the Windows log lives, not two that can drift apart.
+
+    Not a nicety: a pythonw.exe launched by `start` gets sys.stdout is None,
+    and the server dies on its first write. Redirecting to a real file is
+    what keeps it alive; the readable log is the side benefit.
+    """
+    base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "web-bridge"
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "server.log"
+
+
 def windows_install(args) -> int:
     """Autostart on Windows without touching the registry or needing admin.
 
@@ -226,19 +245,28 @@ def windows_install(args) -> int:
     """
     launcher = _win_launcher()
     launcher.parent.mkdir(parents=True, exist_ok=True)
+    log = win_log()
+    # No cmd.exe wrapper: it would linger as a console window in the taskbar
+    # for the life of the server. server.py redirects its own stdout/stderr to
+    # this log when it finds them None (which is what pythonw hands it), so the
+    # launcher can stay a bare `start` and show no window at all.
     launcher.write_text(
         "@echo off\r\n"
-        "rem web-bridge — started at logon. Delete this file to stop autostarting.\r\n"
-        f'start "" /min "{_pythonw()}" "{HERE / "server.py"}"\r\n',
+        "rem web-bridge - started at logon. Delete this file to stop autostarting.\r\n"
+        f'start "" /min "{_pythonw()}" -u "{HERE / "server.py"}"\r\n',
         encoding="utf-8")
     print(f"写入开机启动项 {launcher}")
     free_port()
     import subprocess as _sp
-    _sp.Popen([_pythonw(), str(HERE / "server.py")],
-              creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+    # Same reason as the .cmd above: hand it real handles, never the
+    # caller's (which may be a closed pipe, or nothing at all).
+    with open(log, "ab") as fh:
+        _sp.Popen([_pythonw(), "-u", str(HERE / "server.py")],
+                  stdin=_sp.DEVNULL, stdout=fh, stderr=fh,
+                  creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
     h = wait_healthy(want_extension=True)
     if not h:
-        print("服务没起来，手动跑一次看报什么错：python bridge\\server.py", file=sys.stderr)
+        print(f"服务没起来，看日志：{log}", file=sys.stderr)
         return 1
     print("✅ 服务已启动（下次登录会自动启动）")
     print(f"   {config.base_url()}  扩展连接: {'✅' if h.get('extension_connected') else '❌ 等扩展重连'}")
@@ -259,9 +287,14 @@ def windows_restart(args) -> int:
     if not guard_inflight(args, "重启"):
         return 2
     free_port()
+    log = win_log()
     import subprocess as _sp
-    _sp.Popen([_pythonw(), str(HERE / "server.py")],
-              creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+    # Same reason as the .cmd above: hand it real handles, never the
+    # caller's (which may be a closed pipe, or nothing at all).
+    with open(log, "ab") as fh:
+        _sp.Popen([_pythonw(), "-u", str(HERE / "server.py")],
+                  stdin=_sp.DEVNULL, stdout=fh, stderr=fh,
+                  creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
     h = wait_healthy(want_extension=True)
     print("✅ 已重启" if h else "重启了但没起来")
     return 0 if h else 1

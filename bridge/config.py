@@ -18,7 +18,12 @@ def load() -> dict:
     data: dict = {}
     if CONFIG_PATH.is_file():
         try:
-            data = json.loads(CONFIG_PATH.read_text())
+            # encoding is explicit because gen_ext_config.py writes this file
+            # as utf-8: without it Windows reads it back in the locale
+            # codepage and any non-ascii value (a site home, an agent cwd
+            # under a Chinese user folder) comes back as mojibake --
+            # silently, with no exception to notice.
+            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         except Exception:
             data = {}
     data.setdefault("host", os.environ.get("WEB_BRIDGE_HOST", "127.0.0.1"))
@@ -72,12 +77,12 @@ def save_sites() -> None:
     data = {}
     if CONFIG_PATH.is_file():
         try:
-            data = json.loads(CONFIG_PATH.read_text())
+            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         except Exception:
             data = {}
     data["sites"] = SITES
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    CONFIG_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     CONFIG_PATH.chmod(0o600)
 
 

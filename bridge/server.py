@@ -44,6 +44,23 @@ import journal
 import agents
 import user_scripts
 import results
+import service
+# Under pythonw.exe (how the Windows autostart runs us) there is no console and
+# sys.stdout / sys.stderr are None — the first print() then kills the server and
+# leaves nothing behind to explain why. Owning the redirection here means the
+# launcher stays a plain `start "" /min pythonw server.py`, with no cmd.exe
+# wrapper lingering in the taskbar just to hold a file handle.
+if service.IS_WINDOWS and (sys.stdout is None or sys.stderr is None):
+    import io
+    try:
+        _stream = io.TextIOWrapper(open(service.win_log(), "ab", buffering=0),
+                                   encoding="utf-8", errors="replace", write_through=True)
+    except OSError:                      # a log we cannot open must not stop the server
+        _stream = open(os.devnull, "w", encoding="utf-8")
+    if sys.stdout is None:
+        sys.stdout = _stream
+    if sys.stderr is None:
+        sys.stderr = _stream
 
 VERSION = "0.2.0"
 

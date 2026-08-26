@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -182,12 +183,12 @@ def save(block: dict) -> None:
     data = {}
     if config.CONFIG_PATH.is_file():
         try:
-            data = json.loads(config.CONFIG_PATH.read_text())
+            data = json.loads(config.CONFIG_PATH.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             data = {}
     data["agents"] = block
     config.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    config.CONFIG_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    config.CONFIG_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     config.CONFIG_PATH.chmod(0o600)
     config.CFG["agents"] = block
 
@@ -412,10 +413,21 @@ async def start(agent: str, prompt: str, cwd: str = "", session_id: str = "",
     # stream-json puts one whole event on one line — a large tool result blew
     # past it and killed the run with "Separator is not found, and chunk exceed
     # the limit", losing everything the agent had already done.
+    # CREATE_NO_WINDOW: the agent CLIs are console programs, and the bridge
+    # normally runs under pythonw.exe, which has NO console of its own — so
+    # Windows allocates a fresh console for each child and a terminal window
+    # pops up in the user's face on every sidebar message. The flag is
+    # Windows-only and does not exist on macOS/Linux.
+    # Imported here, not at module scope: service.py imports THIS module, so a
+    # top-level `import service` would be a cycle. By call time it is loaded.
+    import service
+    extra = {}
+    if service.IS_WINDOWS:
+        extra["creationflags"] = subprocess.CREATE_NO_WINDOW
     proc = await asyncio.create_subprocess_exec(
         *argv, cwd=workdir, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.DEVNULL,
-        limit=STREAM_LIMIT)
+        limit=STREAM_LIMIT, **extra)
     run.proc = proc
     asyncio.create_task(_pump(run, proc, r.get("format") or "text"))
     return run

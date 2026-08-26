@@ -180,7 +180,7 @@ def cmd_status(args):
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
-        how = "常驻服务 launchd" if service.installed() else "临时进程（wb service install 可装成常驻）"
+        how = ("常驻服务 " + ("Startup 项" if service.IS_WINDOWS else "launchd") if service.installed() else "临时进程（wb service install 可装成常驻）")
         print(f"bridge: 运行中 ({BASE}) · {how}")
         print(f"扩展连接: {'✅' if data.get('extension_connected') else '❌ 未连接 (在 chrome://extensions 加载/重载 web-bridge)'}")
         print(f"已配置站点: {', '.join(data.get('sites') or []) or '(无)'}")
@@ -643,7 +643,7 @@ def build_parser():
     ag.add_argument("--no-full-access", action="store_true", help="不加跳过确认的参数")
     ag.set_defaults(func=cmd_agents)
 
-    sv = sub.add_parser("service", help="装成开机自启的后台服务（launchd）")
+    sv = sub.add_parser("service", help="装成开机自启的后台服务（macOS launchd / Windows Startup 项）")
     sv.add_argument("action", choices=["install", "uninstall", "restart", "status", "logs"])
     sv.add_argument("-n", "--lines", type=int, default=40, help="logs 显示多少行")
     sv.add_argument("--force", action="store_true",

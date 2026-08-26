@@ -391,6 +391,21 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
   这是唯一安全的轮转时机）。
 - 卸载：`wb service uninstall`（回到「wb 命令按需临时拉起」的旧行为）。
 
+**Windows 侧**（2026-08-26 实测通过，细节见 `INSTALL-WINDOWS.md`）：没有 launchd，
+改为往 `%APPDATA%\...\Startup\web-bridge.cmd` 放一行
+`start "" /min pythonw -u bridge\server.py`，日志 `%LOCALAPPDATA%\web-bridge\server.log`。
+
+- **日志不是由启动器重定向的，是 `server.py` 自己接管的**。这一点看着绕，但它是唯一能同时
+  拿到「有日志」和「零控制台窗口」的写法：`start` 拉起的 pythonw 进程 `sys.stdout` 是 `None`
+  （第一次 print 就死，且不留痕迹），而 `start` 又**不会把自己的重定向传给子进程**；
+  用 `cmd /c` 包一层能拿到句柄，代价是那个 cmd 会跟着服务常驻在任务栏。
+  所以 `server.py` 开头发现流是 `None` 就自己重定向到 `service.win_log()`。
+- **崩溃自愈 Windows 上没有**（launchd KeepAlive 无等价物），进程挂了要手动起或重新登录。
+- `agents.py` 起 agent 子进程时带 `CREATE_NO_WINDOW`，否则每条侧栏消息都会弹一个终端窗口
+  （父进程 pythonw 没有控制台，Windows 就给每个控制台子进程新分配一个）。
+- 平台判断一律用 `service.IS_WINDOWS`。例外只有 `agents.py`：`service.py` 自己 import 了
+  `agents`，所以那边必须在函数内局部 `import service`，否则成环。
+
 ## 测试与验证
 
 ```bash
@@ -400,6 +415,12 @@ python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 
 **别直接跑 `test_mock_ext.py`**：它会连上 8790 抢真扩展的槽位，两边互踢。要单独跑就自己
 设好 `WEB_BRIDGE_PORT` / `WEB_BRIDGE_STATE` 指向一次性实例。
+
+**套件不自洽，注意 `sites`**：`WEB_BRIDGE_STATE` 不隔离站点表——它来自 `config.json`。
+`exec.roundtrip` / `adapter.roundtrip` / 三个 `hub.*` 用例都要求 `chatgpt` 和 `github`
+两个站点已注册，开发机上它们本来就在，所以从没暴露。**在一台全新的机器上（任何平台）
+这 5 项会直接红**，看起来像平台 bug。跑之前用 `WEB_BRIDGE_CONFIG` 指一份带这两个站点的
+临时配置，模板在 `INSTALL-WINDOWS.md` 的测试小节。
 
 桩代码在 `bridge/harness_stub.js`（真文件，不是 Python 字符串）。**这一点是踩了两次才改的**：
 JS 里的 `\n` 先被三引号字符串吃掉一次、又被 `re.sub` 的替换展开吃掉一次，两次都生成出

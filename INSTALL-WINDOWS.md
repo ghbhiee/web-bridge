@@ -5,7 +5,11 @@
 >
 > 项目是在 macOS 上开发的。跨平台的部分（bridge、扩展、能力库、侧栏）是同一套代码；
 > 与系统相关的只有两处：**开机自启的方式**和**查端口占用的命令**，代码里已经按平台分支处理。
-> 下面标注 ⚠️ 的地方是已知与 macOS 不同、**没有在真 Windows 上验证过**的，请实际跑一遍并回报结果。
+> 下面标注 ⚠️ 的地方是已知与 macOS 不同的。
+>
+> **2026-08-26 已在 Windows 11 家庭中文版 26200 / Python 3.14.0 / Chrome MV3 上完整跑过一遍**，
+> 结论见文末「已在真机验证」。当时修掉了 5 个会让 Windows 完全跑不起来的问题，
+> 剩余差异见「已知的 Windows 差异」表。
 
 ## 0. 前置条件
 
@@ -78,8 +82,8 @@ py -3 bridge\cli.py status
 py -3 bridge\cli.py agents --detect
 ```
 
-它会在 PATH 里找 `claude` / `codex` / `dsh` 并写进配置。⚠️ 探测逻辑用 `shutil.which`，
-在 Windows 上应该能找到 `.cmd` / `.exe` 包装器，但**没实测过**；如果没找到，手动编辑
+它会在 PATH 里找 `claude` / `codex` / `dsh` 并写进配置。探测逻辑用 `shutil.which`，
+**已实测**能找到 `.EXE` / `.CMD` 包装器（`claude.EXE`、`codex.CMD` 都正确识别）；如果没找到，手动编辑
 `%USERPROFILE%\.config\web-bridge\config.json` 的 `agents.runners`，把 `path` 写成绝对路径。
 
 ⚠️ **安全须知（务必转达用户）**：默认给 agent 加的是跳过确认的参数
@@ -122,9 +126,27 @@ py -3 bridge\test_mock_ext.py
 **直接跑 test_mock_ext.py 会连上 8790 抢真扩展的槽位，两边互踢**。要跑就先设环境变量：
 
 ```powershell
-$env:WEB_BRIDGE_PORT=8795; $env:WEB_BRIDGE_STATE="$env:TEMP\wb-test"
+$env:WEB_BRIDGE_PORT=8795
+$env:WEB_BRIDGE_STATE="$env:TEMP\wb-test"
+$env:WEB_BRIDGE_CONFIG="$env:TEMP\wb-test-cfg.json"   # ← 见下
 py -3 bridge\server.py    # 另开一个窗口
 py -3 bridge\test_mock_ext.py
+```
+
+⚠️ **`WEB_BRIDGE_STATE` 不隔离 `sites`**：站点表来自 `config.json`，而套件里
+`exec.roundtrip` / `adapter.roundtrip` / 三个 `hub.*` 用例都要求 `chatgpt` 和 `github`
+两个站点已注册。macOS 开发机上它们本来就在，所以从没暴露；**全新装的机器（任何平台）
+会直接红 5 项**，看起来像平台 bug，其实是套件不自洽。用 `WEB_BRIDGE_CONFIG` 指一份
+临时配置即可：
+
+```json
+{
+  "host": "127.0.0.1", "port": 8795, "token": "test-token-for-suite",
+  "sites": {
+    "chatgpt": {"match": ["chatgpt.com"], "home": "https://chatgpt.com/", "adapter": "chatgpt"},
+    "github":  {"match": ["github.com"],  "home": "https://github.com/"}
+  }
+}
 ```
 
 ## 如果你要改代码（给动手做兼容的 agent）
@@ -157,15 +179,58 @@ py -3 bridge\test_mock_ext.py
 **提交**：正常 commit + push 到 `main` 即可。写清楚改了什么、在哪个 Windows 版本上验证过、
 哪些还没验证。macOS 侧会 review 后再 pull。
 
-## 已知的 Windows 差异（都还没在真机上验证）
+## 已知的 Windows 差异
 
-| 位置 | macOS | Windows | 风险 |
+| 位置 | macOS | Windows | 状态 |
 |---|---|---|---|
-| 开机自启 | launchd plist | Startup 目录 `.cmd` | 中：路径含空格已加引号，但未实测 |
-| 查端口占用 | `lsof` | `netstat -ano` | 中：解析的是中文/英文 netstat 输出，列位置假定为标准格式 |
-| 崩溃自愈 | launchd KeepAlive 自动重启 | **没有**——进程挂了要手动起或重新登录 | 高：这是功能缺失，不是 bug |
-| 文件权限 | `chmod 600` 保护 token | chmod 在 Windows 上基本无效 | 中：token 文件靠 NTFS 用户目录权限保护 |
-| 日志 | `~/Library/Logs/web-bridge.log` | 服务由 .cmd 启动，**日志没有重定向** | 中：排查问题时改成前台跑 `py -3 bridge\server.py` 看输出 |
+| 开机自启 | launchd plist | Startup 目录 `.cmd`（`start "" /min pythonw server.py`） | ✅ 已实测：杀掉进程后单跑该 .cmd 能起来，**不留任何控制台窗口** |
+| 查端口占用 | `lsof` | `netstat -ano` | ✅ 已实测：中文版 Windows 的 netstat 状态列仍是英文 `LISTENING`，列位置与英文版一致，解析正确 |
+| 崩溃自愈 | launchd KeepAlive 自动重启 | **没有**——进程挂了要手动起或重新登录 | ⚠️ **仍然缺失**，这是功能缺失不是 bug |
+| 文件权限 | `chmod 600` 保护 token | chmod 在 Windows 上基本无效 | ⚠️ 未改动，token 文件靠 NTFS 用户目录权限保护 |
+| 日志 | `~/Library/Logs/web-bridge.log` | `%LOCALAPPDATA%\web-bridge\server.log` | ✅ 已解决，见下 |
+| 控制台窗口 | 不存在这个问题 | pythonw 下 `sys.stdout` 是 `None`；子进程会被分配新控制台 | ✅ 已解决，见下 |
 
-**请把实际结果回报给用户**：哪几步一次过、哪几步报错、报的什么错。
-这几处分支是照着文档写的，没有真 Windows 环境验证过。
+## 已在真机验证（2026-08-26, Windows 11 家庭中文版 26200 / Python 3.14.0）
+
+`py -3 bridge	est_mock_ext.py` → **66/66 全过**（配好上面那份临时 config 之后）。
+干净的 `origin/main` 在同一台机器上是 **0/66**——连 import 都过不去，见下面第 1 条。
+
+修掉的问题，按严重程度：
+
+1. **`service.py` 模块级 `os.getuid()`** —— Windows 上没有这个函数，`import service` 直接崩，
+   于是 `cli.py` 的**每一个**子命令、以及整个测试套件都跑不了。改成
+   `if hasattr(os, "getuid") else ""`；`DOMAIN`/`SERVICE` 只被 launchctl 用，Windows 上够不着。
+2. **开机自启起不来** —— `start "" /min pythonw server.py` 启动的进程**没有控制台**，
+   `sys.stdout`/`sys.stderr` 都是 `None`，server 在第一次 `print()` 时死掉，而且不留任何痕迹，
+   `service install` 只会说「服务没起来」。另外实测确认：**`start` 不会把自己的重定向传给子进程**，
+   所以 `start "" pythonw ... > log` 也救不了。解法是让 `server.py` 自己接管——发现流是 `None`
+   就重定向到 `service.win_log()`。这样启动器保持一行 `start`，**既有日志又零控制台窗口**
+   （用 cmd /c 包一层也能work，但那个 cmd 会跟着服务常驻在任务栏）。
+3. **agent 子进程弹终端窗口** —— `agents.py` 起 `claude.EXE` 时没带 `CREATE_NO_WINDOW`。
+   agent CLI 都是控制台程序，父进程 pythonw 又没有控制台，于是 Windows 给每个子进程新分配一个
+   控制台窗口：**在侧栏每说一句话就弹一次**。已加（仅 Windows 分支）。
+4. **`config.json` 读写编码不一致** —— `gen_ext_config.py` 显式用 utf-8 写，
+   而 `config.py` / `agents.py` 用系统默认编码读（中文 Windows 上是 cp936）。
+   同一个文件两套编码，macOS 上两者都是 utf-8 所以从没暴露。后果是**静默损坏**：
+   非 ASCII 值（站点 `home`、agent 的 `cwd` 在中文用户目录下）读出来是乱码，不报错。
+   已给 5 处 `read_text()`/`write_text()` 补上 `encoding="utf-8"`。
+5. **`service._run()` 解码** —— `text=True` 用默认编码解 `netstat` 输出；环境里只要有
+   `PYTHONUTF8=1` 就 `UnicodeDecodeError`，`p.stdout` 变 `None`，接着 `None + str` 崩。
+   已改成显式 locale 编码 + `errors="replace"` + `None` 兜底（对 macOS 只是变宽容，行为不变）。
+
+另外顺手修的两个**与平台无关**的 bug（macOS 上同样存在）：
+
+- `register_mcp.py` 删除旧 TOML 块的正则 `[^\[]*` 会在 `args = [` 处提前停下，
+  往 `~/.codex/config.toml` 里残留一行 `["...mcp_server.py"]`——而它是个合法的 TOML 表头，
+  等于污染配置，**每重新注册一次多留一行**。改成匹配到下一个行首表头。
+- `capabilities/x-post.js` 发帖前的文案写入会**偶发重复**（"文案文案"）。原注释归因于
+  「多余的合成 input 事件」，实测推翻：不发任何合成事件也能复现，且同样的调用一次对一次错——
+  是 Draft.js 内部状态异步更新的竞态。既然这个能力是**对外发布**的，改成写完读回来自检、
+  不一致就清空重来（最多 3 次），3 次仍不符就抛错**并且不发送**。压测 6 次全部一次命中。
+
+**没验证到的**：侧栏「页面」「对话」两个标签的 UI 操作（需要人手点）、崩溃自愈（Windows 侧本来就没有）。
+
+**回报给 macOS 侧的注意事项**：所有新增的平台分支都用 `service.IS_WINDOWS`，
+没有新写 `sys.platform`（全仓库现在只有 `service.py:36-37` 那一处定义）。
+唯一的例外是 `agents.py`——它必须用**函数内局部 import**拿到 `service`，
+因为 `service.py` 自己就 import 了 `agents`，模块级反向 import 会成环。

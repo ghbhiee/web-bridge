@@ -43,14 +43,47 @@ if (!box) {
 // X's editor is a rich-text component: assigning textContent doesn't register.
 // execCommand("insertText") goes through the browser's own editing pipeline, so
 // the editor's state updates and the Post button un-disables.
-box.focus();
-await sleep(150);
-document.execCommand("selectAll", false, null);   // replace whatever a previous run left
-document.execCommand("insertText", false, args.text);
-// NO synthetic input event here: execCommand already fires a real one, and
-// racing a second one against it made the editor apply the text TWICE
-// (the composer ended up holding "文案文案"). Verified by tracing each step.
-await sleep(700);
+//
+// But that insert RACES the editor's own async state update and sometimes gets
+// applied twice — the composer ends up holding "文案文案". It is not
+// deterministic (same call, empty composer: correct, then doubled, then
+// correct), so there is no ordering trick that makes it safe. Since this
+// capability PUBLISHES, a wrong composer means wrong text in public: write,
+// then read back and verify, and retry from empty until it matches.
+const setText = async (text) => {
+  box.focus();
+  await sleep(150);
+  // Select the composer's own contents, not the document's: execCommand
+  // ("selectAll") targets the whole document and leaves the editor's internal
+  // selection where it was, so insertText appends instead of replacing.
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(box);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.execCommand("insertText", false, text);
+  // No synthetic input event: execCommand already fires a real one.
+  await sleep(700);
+  return clean(box.textContent);
+};
+
+const wanted = clean(args.text);
+let got = await setText(args.text);
+for (let attempt = 0; attempt < 3 && got !== wanted; attempt++) {
+  // clear explicitly, then write into a known-empty composer
+  box.focus();
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(box);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.execCommand("delete", false, null);
+  await sleep(300);
+  got = await setText(args.text);
+}
+if (got !== wanted) {
+  throw new Error(`输入框内容和要发的文案对不上（编辑器竞态没收敛）：想发 ${JSON.stringify(wanted)}，框里是 ${JSON.stringify(got)}。没有发送。`);
+}
 
 const typed = clean(box.textContent);
 if (!typed) throw new Error("文字没能写进输入框（X 换了编辑器实现？）");

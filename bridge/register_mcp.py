@@ -43,7 +43,7 @@ def backup(p: Path):
 def claude(remove=False, show=False):
     if not CLAUDE.is_file():
         return "claude: ~/.claude.json 不存在"
-    data = json.loads(CLAUDE.read_text())
+    data = json.loads(CLAUDE.read_text(encoding="utf-8"))
     servers = data.setdefault("mcpServers", {})
     if show:
         return f"claude: {list(servers.keys())}"
@@ -52,33 +52,36 @@ def claude(remove=False, show=False):
         servers.pop(NAME, None)
     else:
         servers[NAME] = {"command": COMMAND, "args": ARGS}
-    CLAUDE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    CLAUDE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return f"claude: {'removed' if remove else 'registered'}"
 
 
 def codex(remove=False, show=False):
     if not CODEX.is_file():
         return "codex: config.toml 不存在"
-    text = CODEX.read_text()
+    text = CODEX.read_text(encoding="utf-8")
     if show:
         return "codex: " + str(re.findall(r"\[mcp_servers\.\"?([\w-]+)\"?\]", text))
     backup(CODEX)
-    # the table key is quoted (the name contains a dash), so match both forms
-    block_re = re.compile(r'\n?\[mcp_servers\."?%s"?\][^\[]*' % re.escape(NAME), re.S)
+    # the table key is quoted (the name contains a dash), so match both forms.
+    # Consume to the next table header at line start, NOT to the next '[':
+    # `args = [...]` contains one, and stopping there left the bracket tail
+    # behind as a bogus TOML table that grew by one line per re-register.
+    block_re = re.compile(r'\n?^\[mcp_servers\."?%s"?\](?:\n(?!\[).*)*\n?' % re.escape(NAME), re.M)
     text = block_re.sub("\n", text)
     if not remove:
         args_toml = ", ".join(json.dumps(a) for a in ARGS)
         text = text.rstrip() + (
             f'\n\n[mcp_servers."{NAME}"]\ncommand = {json.dumps(COMMAND)}\nargs = [{args_toml}]\n'
         )
-    CODEX.write_text(text)
+    CODEX.write_text(text, encoding="utf-8")
     return f"codex: {'removed' if remove else 'registered'}"
 
 
 def hermes(remove=False, show=False):
     if not HERMES.is_file():
         return "hermes: config.yaml 不存在"
-    lines = HERMES.read_text().split("\n")
+    lines = HERMES.read_text(encoding="utf-8").split("\n")
     # locate the `mcp_servers:` top-level block
     start = next((i for i, l in enumerate(lines) if l.startswith("mcp_servers:")), None)
     if start is None:
@@ -109,7 +112,7 @@ def hermes(remove=False, show=False):
         while out and not out[0].strip():
             out.pop(0)
         out = entry + out
-    HERMES.write_text("\n".join(lines[:start + 1] + out + lines[end:]))
+    HERMES.write_text("\n".join(lines[:start + 1] + out + lines[end:]), encoding="utf-8")
     return f"hermes: {'removed' if remove else 'registered'}"
 
 
@@ -119,7 +122,7 @@ OPENCLAW = Path.home() / ".openclaw/openclaw.json"
 def openclaw(remove=False, show=False):
     if not OPENCLAW.is_file():
         return "openclaw: openclaw.json 不存在"
-    data = json.loads(OPENCLAW.read_text())
+    data = json.loads(OPENCLAW.read_text(encoding="utf-8"))
     servers = data.setdefault("mcp", {}).setdefault("servers", {})
     if show:
         return f"openclaw: {list(servers.keys())}"
@@ -128,7 +131,7 @@ def openclaw(remove=False, show=False):
         servers.pop(NAME, None)
     else:
         servers[NAME] = {"command": COMMAND, "args": ARGS}
-    OPENCLAW.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    OPENCLAW.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return f"openclaw: {'removed' if remove else 'registered'}"
 
 
