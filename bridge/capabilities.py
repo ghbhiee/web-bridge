@@ -27,6 +27,7 @@ import fnmatch
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -62,6 +63,12 @@ def _parse(path: Path) -> Optional[dict]:
     meta.setdefault("autorun", False)
     meta["file"] = str(path)
     meta["body"] = text[m.end():].strip()
+    try:
+        meta["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(path.stat().st_mtime))
+    except OSError:
+        meta.setdefault("updated", "")
+    # auto-promoted files record who ran them; hand-written ones may declare it
+    meta.setdefault("author", "auto" if meta.get("auto") else meta.get("author", ""))
     return meta
 
 

@@ -34,7 +34,10 @@ async function api(path, opts = {}) {
   if (path.startsWith("/exec")) return { ok: true, result: "harness exec result" };
   if (path.startsWith("/user-scripts")) return { ok: true, total: 1, scripts: [
     { id: "u_demo", name: "隐藏侧边栏", code: "document.querySelector('.sidebar')?.remove();\nreturn {hidden:true};",
-      matches: ["example.com"], autorun: true, note: "" }] };
+      matches: ["example.com"], autorun: true,
+      note: "隐藏左侧导航栏，正文占满宽度\n· 2026-08-26 增加了折叠动画",
+      updated: new Date(Date.now() - 9e5).toISOString().slice(0, 19),
+      created_by: "claude", updated_by: "codex", revisions: 2 }] };
   if (path.startsWith("/user-script/")) {
     if ((opts.method || "GET") === "POST" && path.endsWith("/run"))
       return { ok: true, script: "隐藏侧边栏", result: { hidden: true } };
@@ -61,7 +64,9 @@ window.fetch = async (u, opts) => {
       { type: "start", agent: "claude" },
       { type: "tool", name: "mcp__web-bridge__web_exec",
         input: { code: "return document.title;", url: "x.com" } },
-      { type: "text", text: "这是 harness 里的模拟回答。\n\n```js\nreturn document.title;\n```" },
+      { type: "text", text: "这是 harness 里的模拟回答。\n\n```js\n" +
+        Array.from({length: 30}, (_, i) => `const line${i} = ${i};`).join("\n") +
+        "\nreturn document.title;\n```" },
       { type: "done", session_id: "harness-session" },
       { type: "end" },
     ].map((e) => JSON.stringify(e)).join("\n");

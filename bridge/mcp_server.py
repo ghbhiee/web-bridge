@@ -69,7 +69,7 @@ def _ensure_server():
         return True
     # If the LaunchAgent owns the port, let launchd start it — a server spawned
     # here would lose the race and exit, leaving the caller confused.
-    if service.installed():
+    if service.installed() and not service.IS_WINDOWS:
         subprocess.run(["launchctl", "kickstart", service.SERVICE], capture_output=True)
         for _ in range(40):
             if _server_up():

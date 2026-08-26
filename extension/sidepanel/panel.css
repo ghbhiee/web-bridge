@@ -84,6 +84,7 @@ select.mini { max-width: 130px; }
 .prompt-chip { background: var(--chip); border: 1px solid var(--line); border-radius: 12px;
                padding: 3px 9px; font-size: 11px; cursor: pointer; }
 .prompt-chip:hover { border-color: var(--accent); color: var(--accent); }
+.meta { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
 .uses { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
 .search { width: 100%; border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
           background: var(--bg); margin-bottom: 8px; font-size: 12px; flex: none; }
@@ -114,6 +115,16 @@ select.mini { max-width: 130px; }
 .prow-edit input, .prow-edit select { border: 1px solid var(--line); border-radius: 5px; padding: 3px 5px; background: var(--bg); font-size: 11px; min-width: 0; }
 .prow-edit .pdesc { grid-column: 1 / -1; }
 .prow-edit .req { display: flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+
+/* code blocks: collapsed by default, copyable whole */
+.codebox { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 7px 0; }
+.codehead { display: flex; align-items: center; gap: 6px; padding: 4px 7px; background: var(--chip);
+            border-bottom: 1px solid var(--line); font-size: 10.5px; color: var(--muted); }
+.codehead .lang { flex: 1; font-family: ui-monospace, monospace; }
+.codebox pre { margin: 0; border-radius: 0; max-height: none; }
+.codebox pre.clipped { max-height: 15em; overflow: hidden;
+                       -webkit-mask-image: linear-gradient(#000 72%, transparent); }
+.spin.done { color: var(--ok); }
 
 /* chat markdown */
 .msg .body { white-space: normal; }

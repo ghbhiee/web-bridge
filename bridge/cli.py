@@ -131,7 +131,7 @@ def ensure_server(autostart=True) -> bool:
     # When the LaunchAgent is installed it owns the port; spawning a second
     # server here would just lose the race and exit, so ask launchd to start
     # the real one instead. Falls through to the ad-hoc spawn otherwise.
-    if service.installed():
+    if service.installed() and not service.IS_WINDOWS:
         subprocess.run(["launchctl", "kickstart", service.SERVICE],
                        capture_output=True, text=True)
         for _ in range(40):

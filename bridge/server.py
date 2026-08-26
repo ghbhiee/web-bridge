@@ -690,6 +690,7 @@ class AutorunReq(BaseModel):
 
 class UserScriptReq(BaseModel):
     code: str
+    by: Optional[str] = None               # which agent wrote it, for the list
     # None means "leave whatever is stored" — an update from the chat sends only
     # the code, and must not reset the switches the user set in the panel
     name: Optional[str] = None

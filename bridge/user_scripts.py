@@ -126,15 +126,30 @@ def save(script: dict) -> dict:
             return prev.get(field, default)
         return value
 
+    # The note is a running record, not a single value: on an update the new
+    # summary is appended with its date, so the entry says what it can do now AND
+    # what each round added. Without this an updated script kept describing only
+    # its first version.
+    note = (script.get("note") or "").strip()
+    old_note = (prev.get("note") or "").strip()
+    if note and old_note and note not in old_note:
+        merged = old_note + f"\n· {now[:10]} {note}"
+    else:
+        merged = note or old_note
+
     record = {
         "id": sid,
         "name": (keep("name", script.get("name"), "") or "").strip() or prev.get("name") or "未命名脚本",
         "code": script["code"],
         "matches": keep("matches", script.get("matches"), None) or prev.get("matches") or ["*"],
         "autorun": bool(keep("autorun", script.get("autorun"), False)),
-        "note": (keep("note", script.get("note"), "") or "").strip(),
+        "note": merged,
         "created": prev.get("created", now),
         "updated": now,
+        # who made it, so a list of scripts says where each came from
+        "created_by": prev.get("created_by") or script.get("by") or "",
+        "updated_by": script.get("by") or prev.get("updated_by") or "",
+        "revisions": int(prev.get("revisions", 0)) + (1 if existing else 0),
     }
     if existing:
         scripts[scripts.index(existing)] = record

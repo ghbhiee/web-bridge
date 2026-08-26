@@ -391,6 +391,28 @@ async def main():
     same_id = [x for x in data.get("scripts", []) if x["id"] == uid]
     results.append(("user_scripts.update_does_not_duplicate", len(same_id) == 1))
 
+    # a saved script must say what it does, when it changed and who wrote it —
+    # the list shows a name and a sentence, never the code
+    code, data = await asyncio.to_thread(http, "PUT", f"/user-script/{uid}",
+                                         {"code": "return 3;", "note": "加了分页", "by": "claude"})
+    rec = data.get("script") or {}
+    results.append(("user_scripts.records_author_and_time",
+                    rec.get("updated_by") == "claude" and bool(rec.get("updated"))
+                    and rec.get("revisions", 0) >= 1))
+    # an update appends to the description instead of replacing it, so the entry
+    # records what each round added
+    code, data = await asyncio.to_thread(http, "PUT", f"/user-script/{uid}",
+                                         {"code": "return 4;", "note": "又加了排序"})
+    note = (data.get("script") or {}).get("note", "")
+    results.append(("user_scripts.note_accumulates",
+                    "加了分页" in note and "又加了排序" in note))
+
+    # the capability library shows when each was last touched
+    code, data = await asyncio.to_thread(http, "GET", "/capabilities")
+    caps = data.get("capabilities", [])
+    results.append(("capabilities.expose_updated_time",
+                    bool(caps) and all(c.get("updated") for c in caps)))
+
     # a script has to be able to leave this machine: export it as a bookmarklet
     code, data = await asyncio.to_thread(http, "GET", f"/user-script/{uid}/bookmarklet")
     url = data.get("url", "")

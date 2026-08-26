@@ -32,6 +32,9 @@ sys.path.insert(0, str(HERE))
 import config  # noqa: E402
 import agents  # noqa: E402
 
+IS_WINDOWS = sys.platform.startswith("win")
+IS_MAC = sys.platform == "darwin"
+
 LABEL = "com.web-bridge.server"
 PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
 LOG = Path.home() / "Library/Logs/web-bridge.log"
@@ -80,6 +83,9 @@ def plist_body() -> dict:
 
 
 def installed() -> bool:
+    """Is autostart set up? Different mechanism per OS, one question."""
+    if IS_WINDOWS:
+        return _win_launcher().exists()
     return PLIST.is_file()
 
 
@@ -108,10 +114,24 @@ def wait_healthy(seconds: float = 12.0, want_extension: bool = False) -> dict | 
     return last
 
 
+def _windows_port_pids() -> list[int]:
+    """Who is listening, via netstat — Windows has no lsof."""
+    code, out = _run("netstat", "-ano", "-p", "TCP")
+    pids = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING":
+            if parts[1].endswith(f":{config.PORT}") and parts[4].isdigit():
+                pids.append(int(parts[4]))
+    return pids
+
+
 def port_owner_pids() -> list[int]:
     """Only the LISTENING process. A bare `lsof -ti :8790` also lists every
     client holding a connection — including Chrome, whose extension keeps the
     WebSocket open. Killing that list would kill the user's browser."""
+    if IS_WINDOWS:
+        return _windows_port_pids()
     code, out = _run("lsof", "-ti", f"tcp:{config.PORT}", "-sTCP:LISTEN")
     return [int(x) for x in out.split() if x.isdigit()] if code == 0 else []
 
@@ -180,7 +200,76 @@ def guard_inflight(args, what: str) -> bool:
     return False
 
 
+def _startup_dir() -> Path:
+    return (Path(os.environ.get("APPDATA", Path.home()))
+            / "Microsoft/Windows/Start Menu/Programs/Startup")
+
+
+def _win_launcher() -> Path:
+    return _startup_dir() / "web-bridge.cmd"
+
+
+def _pythonw() -> str:
+    """Prefer pythonw.exe so the bridge runs without a console window."""
+    exe = Path(sys.executable)
+    noconsole = exe.with_name("pythonw.exe")
+    return str(noconsole if noconsole.exists() else exe)
+
+
+def windows_install(args) -> int:
+    """Autostart on Windows without touching the registry or needing admin.
+
+    A .cmd in the Startup folder is the least surprising mechanism available to
+    a normal user account: visible, editable, removable in Explorer, and it
+    survives reboots. (No Task Scheduler: it needs elevation for the useful
+    trigger types and is far harder to undo by hand.)
+    """
+    launcher = _win_launcher()
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text(
+        "@echo off\r\n"
+        "rem web-bridge — started at logon. Delete this file to stop autostarting.\r\n"
+        f'start "" /min "{_pythonw()}" "{HERE / "server.py"}"\r\n',
+        encoding="utf-8")
+    print(f"写入开机启动项 {launcher}")
+    free_port()
+    import subprocess as _sp
+    _sp.Popen([_pythonw(), str(HERE / "server.py")],
+              creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+    h = wait_healthy(want_extension=True)
+    if not h:
+        print("服务没起来，手动跑一次看报什么错：python bridge\\server.py", file=sys.stderr)
+        return 1
+    print("✅ 服务已启动（下次登录会自动启动）")
+    print(f"   {config.base_url()}  扩展连接: {'✅' if h.get('extension_connected') else '❌ 等扩展重连'}")
+    return 0
+
+
+def windows_uninstall(args) -> int:
+    launcher = _win_launcher()
+    if launcher.exists():
+        launcher.unlink()
+        print(f"已删除 {launcher}")
+    free_port()
+    print("服务已卸载（wb 命令仍会按需临时拉起 server）")
+    return 0
+
+
+def windows_restart(args) -> int:
+    if not guard_inflight(args, "重启"):
+        return 2
+    free_port()
+    import subprocess as _sp
+    _sp.Popen([_pythonw(), str(HERE / "server.py")],
+              creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+    h = wait_healthy(want_extension=True)
+    print("✅ 已重启" if h else "重启了但没起来")
+    return 0 if h else 1
+
+
 def cmd_install(args) -> int:
+    if IS_WINDOWS:
+        return windows_install(args)
     if not guard_inflight(args, "安装/接管端口"):
         return 2
     PLIST.parent.mkdir(parents=True, exist_ok=True)
@@ -225,6 +314,8 @@ def cmd_install(args) -> int:
 
 
 def cmd_uninstall(args) -> int:
+    if IS_WINDOWS:
+        return windows_uninstall(args)
     if not guard_inflight(args, "卸载"):
         return 2
     if loaded():
@@ -244,6 +335,8 @@ def live_agent_runs() -> list:
 
 
 def cmd_restart(args) -> int:
+    if IS_WINDOWS:
+        return windows_restart(args)
     if not installed():
         print("服务没装，先 install", file=sys.stderr)
         return 1
@@ -265,6 +358,13 @@ def cmd_restart(args) -> int:
 def cmd_status(args) -> int:
     h = health()
     pids = port_owner_pids()
+    if IS_WINDOWS:
+        launcher = _win_launcher()
+        print(f"开机启动:   {'已装 ' + str(launcher) if launcher.exists() else '未装'}")
+        print(f"端口 {config.PORT}:  {'占用 pid ' + ','.join(map(str, pids)) if pids else '空闲'}")
+        print(f"服务:       {'✅ 运行中' if h else '❌ 没响应'}"
+              + (f"  扩展连接: {'✅' if h.get('extension_connected') else '❌'}" if h else ""))
+        return 0 if h else 1
     print(f"plist:      {'已安装 ' + str(PLIST) if installed() else '未安装'}")
     print(f"launchd:    {'已加载' if loaded() else '未加载'}")
     if loaded():

@@ -45,6 +45,11 @@ extension/         MV3 扩展
 
 ## 安装
 
+> **Windows 用户**：另见 [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md)——那份是写给 agent 照着做的，
+> 含已知的平台差异清单。下面这套是 macOS 的。
+
+### macOS
+
 1. **加载扩展（一次性，需手动）**：chrome://extensions → 打开右上「开发者模式」→
    「加载已解压的扩展程序」→ 选 `~/cc/web-bridge/extension`。
    （程序化加载被安全策略拦截，故此步需手动；之后 `web-bridge reload` 可自动重载迭代。）

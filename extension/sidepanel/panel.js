@@ -202,6 +202,50 @@ function describeTool(name, input) {
   }
 }
 
+// A page script is routinely hundreds of lines, and dumping it whole pushed the
+// answer — and the save button — far off screen. Collapsed by default, with the
+// full text always one click away on the clipboard.
+const CODE_PREVIEW_LINES = 12;
+
+function enhanceCode(root) {
+  for (const pre of root.querySelectorAll("pre")) {
+    if (pre.dataset.wrapped) continue;
+    pre.dataset.wrapped = "1";
+    const codeEl = pre.querySelector("code");
+    const full = codeEl ? codeEl.textContent : pre.textContent;
+    const lines = full.split("\n").length;
+
+    const box = document.createElement("div");
+    box.className = "codebox";
+    const head = document.createElement("div");
+    head.className = "codehead";
+    head.innerHTML = `<span class="lang">${esc(codeEl?.dataset.lang || "js")} · ${lines} 行</span>`;
+    const toggle = document.createElement("button");
+    toggle.className = "mini ghost";
+    const copy = document.createElement("button");
+    copy.className = "mini ghost";
+    copy.textContent = "复制全部";
+    head.append(toggle, copy);
+
+    pre.replaceWith(box);
+    box.append(head, pre);
+
+    const long = lines > CODE_PREVIEW_LINES;
+    const setOpen = (open) => {
+      pre.classList.toggle("clipped", long && !open);
+      toggle.textContent = long ? (open ? "收起" : `展开全部 (${lines} 行)`) : "已全部显示";
+      toggle.disabled = !long;
+    };
+    setOpen(!long);
+    toggle.addEventListener("click", () => setOpen(pre.classList.contains("clipped")));
+    copy.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(full);
+      copy.textContent = "已复制 ✓";
+      setTimeout(() => (copy.textContent = "复制全部"), 1400);
+    });
+  }
+}
+
 function agentBubble() {
   const el = addMsg("agent", '<span class="who"></span><span class="body"></span>');
   el.querySelector(".who").textContent = state.agents.default || "agent";
@@ -243,10 +287,15 @@ function offerSave(bubble, text) {
     const target = !asNew && state.savedScript ? state.savedScript.id : "new";
     // On an update only the code travels: name, matches and the autorun switch
     // belong to whatever the user set in the panel and must survive.
+    // the agent is asked to open the code with `// 说明：…`; that line is what
+    // the user sees in the list, and on an update it is appended so the entry
+    // records what each round added
+    const summary = (/^\s*\/\/\s*说明[：:]\s*(.+)$/m.exec(code) || [])[1]?.trim() || "";
+    const by = $("agent-pick").value || "";
     const body = target === "new"
       ? { name: scriptName(code, bubble), code, matches: [hostOf(state.tab?.url) || "*"],
-          autorun: false, note: "对话里让 agent 写的" }
-      : { code };
+          autorun: false, note: summary || "对话里让 agent 写的", by }
+      : { code, note: summary, by };
     const data = await api(`/user-script/${encodeURIComponent(target)}`, {
       method: "PUT", body: JSON.stringify(body),
     });
@@ -298,7 +347,8 @@ function offerSave(bubble, text) {
   bubble.appendChild(box);
 }
 
-async function consumeStream(resp, bubble, spin) {
+async function consumeStream(resp, bubble, spinArg) {
+  let spin = spinArg;
   const body = bubble.querySelector(".body");
   const reader = resp.body.getReader();
   const dec = new TextDecoder();
@@ -317,15 +367,23 @@ async function consumeStream(resp, bubble, spin) {
       if (ev.type === "text") {
         text += ev.text;
         body.innerHTML = renderMarkdown(text);
+        enhanceCode(body);
+        setPhase(spin, "agent 正在回答");
       } else if (ev.type === "tool") {
         const t = document.createElement("div");
         t.className = "tool";
         t.textContent = "⚙ " + describeTool(ev.name, ev.input);
         t.title = `${ev.name} ${JSON.stringify(ev.input || {})}`;   // full call on hover
+        // name the layer that is busy: a page script running is not the same as
+        // the agent thinking, and the wait feels very different
+        setPhase(spin, /web_exec|run_capability/.test(ev.name || "")
+          ? "脚本在页面上执行" : "调用 " + describeTool(ev.name, ev.input).slice(0, 24));
         bubble.insertBefore(t, spin);
       } else if (ev.type === "done") {
         if (ev.session_id) state.session = ev.session_id;
-        if (!text && ev.text) { text = ev.text; body.innerHTML = renderMarkdown(text); }
+        if (!text && ev.text) { text = ev.text; body.innerHTML = renderMarkdown(text); enhanceCode(body); }
+        endSpin(spin, true, ev.cost_usd ? "$" + Number(ev.cost_usd).toFixed(3) : "");
+        spin = null;                       // 'done' is the real end; keep it visible
       } else if (ev.type === "stderr") {
         console.warn("[agent]", ev.text);
       } else if (ev.type === "end" && ev.error) {
@@ -337,13 +395,38 @@ async function consumeStream(resp, bubble, spin) {
   return text;
 }
 
+// "运行中…" never changed, so there was no way to tell whether the agent was
+// still thinking, a tool was running, or the page script was executing — the
+// user just saw a frozen label and had to guess whether to wait.
 function startBubble() {
   const bubble = agentBubble();
   const spin = document.createElement("div");
   spin.className = "spin";
-  spin.textContent = "运行中…";
+  spin.dataset.started = String(Date.now());
+  spin.dataset.phase = "agent 启动中";
   bubble.appendChild(spin);
+  tickSpin(spin);
+  spin.timer = setInterval(() => tickSpin(spin), 1000);
   return { bubble, spin };
+}
+
+function tickSpin(spin) {
+  const secs = Math.round((Date.now() - Number(spin.dataset.started)) / 1000);
+  spin.textContent = `⏳ ${spin.dataset.phase} · ${secs}s`;
+}
+
+function setPhase(spin, phase) {
+  if (!spin) return;
+  spin.dataset.phase = phase;
+  tickSpin(spin);
+}
+
+function endSpin(spin, ok, note) {
+  if (!spin) return;
+  clearInterval(spin.timer);
+  const secs = Math.round((Date.now() - Number(spin.dataset.started)) / 1000);
+  spin.className = "spin done";
+  spin.textContent = (ok ? "✅ 完成" : "⚠️ 结束") + ` · 用时 ${secs}s` + (note ? " · " + note : "");
 }
 
 // A run outlives the panel: the agent keeps working while the panel is closed.
@@ -361,14 +444,15 @@ async function reattach(runId) {
     const text = (info.events || []).filter((e) => e.type === "text").map((e) => e.text).join("")
       || (info.events || []).find((e) => e.type === "done")?.text || "";
     bubble.querySelector(".body").innerHTML = renderMarkdown(text || "(这次运行没有产出文本)");
-    spin.remove();
+    enhanceCode(bubble.querySelector(".body"));
+    endSpin(spin, !info.error, info.error ? "中断" : "");
     if (info.error) addMsg("err", esc(info.error));
     offerSave(bubble, text);
     state.run = null;
     persist();
     return;
   }
-  spin.textContent = "重新接上正在运行的任务…";
+  setPhase(spin, "重新接上正在跑的任务");
   $("send").disabled = true;
   $("stop").hidden = false;
   try {
@@ -380,7 +464,7 @@ async function reattach(runId) {
   } catch (e) {
     addMsg("err", "重新接上失败：" + esc(e.message));
   } finally {
-    spin.remove();
+    if (spin.isConnected && !spin.classList.contains("done")) endSpin(spin, false);
     $("send").disabled = false;
     $("stop").hidden = true;
     state.run = null;
@@ -425,7 +509,9 @@ async function ask(prompt) {
   } catch (e) {
     addMsg("err", esc(e.message));
   } finally {
-    spin.remove();
+    // leave a finished spinner in place: "✅ 完成 · 用时 12s" is the answer to
+    // "is it still running?", which is exactly what was missing
+    if (spin.isConnected && !spin.classList.contains("done")) endSpin(spin, false);
     $("send").disabled = false;
     $("stop").hidden = true;
     state.run = null;
@@ -548,14 +634,16 @@ function renderScripts() {
   list.innerHTML = caps.map((c) => {
     const u = state.usage[c.id];
     const used = u ? `用过 ${u.ok_runs || u.runs} 次` : "还没用过";
-    const when = u && u.last ? " · " + u.last.replace("T", " ").slice(5, 16) : "";
+    const lastUse = u && u.last ? " · 最近用 " + u.last.replace("T", " ").slice(5, 16) : "";
     return `<div class="item">
       <div class="top">
         <span class="name">${esc(c.title || c.id)}</span>
         <span class="kind">${KIND_LABEL[c.kind] || c.kind || ""}</span>
       </div>
       ${c.description ? `<div class="desc">${esc(c.description.slice(0, 150))}</div>` : ""}
-      <div class="ops"><span class="uses">${used}${when}</span></div>
+      <div class="ops"><span class="uses">${used}${lastUse}${
+        c.updated ? " · " + whenShort(c.updated) : ""}${
+        c.author ? " · " + esc(c.author === "auto" ? "自动沉淀" : c.author) : ""}</span></div>
     </div>`;
   }).join("");
 }
@@ -624,6 +712,25 @@ async function loadUserScripts() {
   }
 }
 
+// "2 分钟前" answers "is this the version I just saved?" at a glance; a raw
+// timestamp does not.
+function whenShort(iso) {
+  const w = when(iso);
+  return w.replace("更新", "改");
+}
+
+function when(iso) {
+  if (!iso) return "";
+  const t = new Date(iso.replace(" ", "T"));
+  const mins = Math.round((Date.now() - t.getTime()) / 60000);
+  if (!isFinite(mins)) return esc(iso.slice(0, 16).replace("T", " "));
+  if (mins < 1) return "刚刚更新";
+  if (mins < 60) return `${mins} 分钟前更新`;
+  if (mins < 60 * 24) return `${Math.round(mins / 60)} 小时前更新`;
+  if (mins < 60 * 24 * 30) return `${Math.round(mins / 1440)} 天前更新`;
+  return esc(iso.slice(0, 10)) + " 更新";
+}
+
 function renderUserScripts() {
   const list = $("user-list");
   if (!state.userScripts.length) {
@@ -640,7 +747,9 @@ function renderUserScripts() {
         <span class="name">${esc(u.name)}</span>
         <span class="kind">${esc((u.matches || []).join(",").slice(0, 22))}</span>
       </div>
-      ${u.note ? `<div class="desc">${esc(u.note)}</div>` : ""}
+      ${u.note ? `<div class="desc">${esc(u.note).replace(/\n/g, "<br>")}</div>` : ""}
+      <div class="meta">${when(u.updated)}${u.revisions ? " · 改过 " + u.revisions + " 次" : ""}${
+        u.updated_by || u.created_by ? " · " + esc(u.updated_by || u.created_by) : ""}</div>
       <div class="ops">
         <button class="mini primary run">运行</button>
         <button class="mini ghost edit">编辑</button>

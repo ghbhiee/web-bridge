@@ -55,7 +55,8 @@ bridge/
   mock_ext.py / test_mock_ext.py   无浏览器时的假扩展 + 回归测试（19 项）
   panel_harness.py 把扩展侧栏渲染成普通网页以便测试（见「测试与验证」）
   harness_stub.js  harness 用的桩（真文件，避免多层转义把 JS 改坏）
-  service.py       launchd 服务安装/卸载/重启/状态/日志（wb service 就是它）
+  service.py       服务安装/卸载/重启/状态/日志；macOS 走 launchd，Windows 走 Startup 目录 .cmd
+  gen_ext_config.py  跨平台生成 extension/config.js（原来是 bash，Windows 用不了）
 capabilities/      能力库（写一个文件 = 新增能力，无需重载扩展）；auto/ 是自动沉淀出来的
 extension/         MV3 扩展；sidepanel/ 是右侧驻留侧栏（对话 / 脚本库 / 页面 三个标签）
 ```
@@ -272,6 +273,17 @@ payload 验证过：变成可见文本，不执行。
 两个不能省的细节：必须是**拖**（Chrome 拒绝手输/粘贴 `javascript:` 书签，也没 API 能建）；
 存的代码是函数体（可能 `await`、可能顶层 `return`），要包成 async IIFE 才不会一点就语法错。
 
+**状态要说清楚是哪一层在忙**：以前一直显示静态的「运行中…」，用户分不清是 agent 在想、
+工具在跑、还是脚本在页面上执行，只能干等。现在按事件切换阶段文案 + 秒表，
+结束后**保留**「✅ 完成 · 用时 12s · $0.21」——「它还在跑吗」这个问题要有答案。
+
+**代码块默认折叠**（超过 12 行），带「展开全部 (N 行)」和「复制全部」。页面脚本动辄几百行，
+全展开会把回答和保存按钮顶出屏幕。
+
+**脚本要有说明**：简报要求 agent 在代码第一行写 `// 说明：…`，面板存成脚本说明；
+更新时**追加**而不是覆盖（`· 2026-08-26 加了分页`），于是列表里能看出每轮加了什么。
+列表还显示相对时间和作者（哪个 agent 写的）；能力库显示文件修改时间 + 是否自动沉淀。
+
 **中文输入法**：`Enter` 在候选词窗口开着时属于输入法（选词），当成发送会把半截拼音发出去。
 `keydown` 里先看 `isComposing` / `keyCode === 229` / `compositionstart-end` 三个信号
 （浏览器对前两个的支持不一致，所以都查），`compositionend` 后延一拍再解除。
@@ -375,7 +387,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 59 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 62 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 
