@@ -127,6 +127,36 @@ py -3 bridge\server.py    # 另开一个窗口
 py -3 bridge\test_mock_ext.py
 ```
 
+## 如果你要改代码（给动手做兼容的 agent）
+
+**先读这一节再动手**，跨平台分支已经写好了一部分，重写会和 macOS 侧冲突。
+
+已经存在的平台分支，**请在原处扩展，不要另起炉灶**：
+
+| 文件 | 已有的分支 | 说明 |
+|---|---|---|
+| `bridge/service.py` | `IS_WINDOWS` / `IS_MAC` 常量 | `cmd_install` / `cmd_uninstall` / `cmd_restart` 开头就分流到 `windows_*()`；`installed()`、`cmd_status()`、`port_owner_pids()` 也已分平台 |
+| `bridge/service.py` | `_windows_port_pids()` | 用 `netstat -ano` 解析监听端口的 pid（替代 lsof）。**中文版 Windows 的 netstat 输出列位置是否一致，需要你实测** |
+| `bridge/gen_ext_config.py` | 纯 Python | 替代 `gen_ext_config.sh`，两个平台通用，不要再写 .ps1 |
+| `bridge/cli.py` / `bridge/mcp_server.py` | `service.installed() and not service.IS_WINDOWS` | 避免在 Windows 上调 `launchctl` |
+
+**改动约定**（为了 pull 回 macOS 时能直接合）：
+1. **不要删或改写 macOS 分支**，只加 Windows 分支；共用逻辑保持共用
+2. 平台判断统一用 `service.IS_WINDOWS`，不要各文件自己 `sys.platform.startswith("win")`
+3. 路径一律 `pathlib.Path`，不要拼 `/` 或 `\`
+4. 新增依赖前先问——目前 bridge 只依赖 `fastapi` / `uvicorn` / `websockets`，保持这样
+5. `extension/` 下的代码是浏览器里跑的，**与操作系统无关**，正常情况下不需要改。
+   如果你发现必须改，那多半是别的问题，先说明原因
+6. 改完在**两个地方**记一笔：`INSTALL-WINDOWS.md` 的差异表、`HANDOFF.md` 的对应小节
+
+**测试**：`py -3 bridge\test_mock_ext.py`，但必须先设 `WEB_BRIDGE_PORT` / `WEB_BRIDGE_STATE`
+指向一次性实例（见上文），否则会抢真扩展的连接。macOS 侧目前 66 项全过，
+**你的改动不应该让任何一项变红**；如果某项在 Windows 上天然不适用，
+不要删掉它，用条件跳过并说明原因。
+
+**提交**：正常 commit + push 到 `main` 即可。写清楚改了什么、在哪个 Windows 版本上验证过、
+哪些还没验证。macOS 侧会 review 后再 pull。
+
 ## 已知的 Windows 差异（都还没在真机上验证）
 
 | 位置 | macOS | Windows | 风险 |
