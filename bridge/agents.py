@@ -249,8 +249,18 @@ def parse_line(fmt: str, line: str) -> list[dict]:
 # --------------------------------------------------------------------------- #
 # runs
 # --------------------------------------------------------------------------- #
+RUN_DIR = Path(os.environ.get("WEB_BRIDGE_STATE", str(config.CONFIG_PATH.parent))) / "runs"
+RUN_KEEP = 40                       # newest N kept on disk
+
+
 class Run:
-    """One agent invocation, kept so a dropped panel can reattach to it."""
+    """One agent invocation, kept so a dropped panel can reattach to it.
+
+    Also written to disk. Runs used to live only in memory, so restarting the
+    bridge — which happens on every code change — killed whatever was in flight
+    AND erased the history: the panel reattached to an id that no longer existed
+    and showed the user nothing at all for work they had waited minutes for.
+    """
 
     def __init__(self, run_id: str, agent: str, prompt: str, cwd: str):
         self.id = run_id
@@ -265,9 +275,30 @@ class Run:
         self.session_id: Optional[str] = None
         self._waiters: list[asyncio.Queue] = []
 
+    def as_record(self) -> dict:
+        return {"id": self.id, "agent": self.agent, "prompt": self.prompt,
+                "cwd": self.cwd, "started": self.started, "done": self.done,
+                "error": self.error, "session_id": self.session_id,
+                "events": self.events}
+
+    def persist(self) -> None:
+        """Snapshot to disk. Cheap enough per event for a panel-driven agent."""
+        try:
+            RUN_DIR.mkdir(parents=True, exist_ok=True)
+            path = RUN_DIR / f"{self.id}.json"
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.as_record(), ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            pass
+
     def emit(self, ev: dict) -> None:
         ev["i"] = len(self.events)
         self.events.append(ev)
+        # snapshot as it goes, not only at the end: a run killed mid-flight (a
+        # service restart) still leaves the user everything it had produced
+        if len(self.events) % 5 == 0:
+            self.persist()
         if ev.get("session_id"):
             self.session_id = ev["session_id"]
         for q in self._waiters:
@@ -286,6 +317,45 @@ class Run:
 
 
 RUNS: dict[str, Run] = {}
+
+
+def restore_runs() -> int:
+    """Reload runs from disk at startup.
+
+    A run still marked running belongs to a process that is gone — its
+    subprocess died with the old server — so it is closed out with an
+    explanation. Silence is what the panel showed before, which reads as "the
+    agent did nothing" rather than "the bridge restarted under you".
+    """
+    if not RUN_DIR.is_dir():
+        return 0
+    files = sorted(RUN_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    for stale in files[RUN_KEEP:]:
+        stale.unlink(missing_ok=True)
+    loaded = 0
+    for path in files[:RUN_KEEP]:
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        run = Run(rec["id"], rec.get("agent", ""), rec.get("prompt", ""), rec.get("cwd", ""))
+        run.started = rec.get("started", time.time())
+        run.events = rec.get("events", [])
+        run.session_id = rec.get("session_id")
+        run.error = rec.get("error")
+        run.done = True
+        if not rec.get("done"):
+            run.error = run.error or "这次运行被 bridge 重启中断了（服务重启会杀掉正在跑的 agent）"
+            run.events.append({"type": "end", "error": run.error, "i": len(run.events)})
+            run.persist()
+        RUNS[run.id] = run
+        loaded += 1
+    return loaded
+
+
+def live_runs() -> list[str]:
+    """Ids of runs still going — a restart would kill these."""
+    return [r.id for r in RUNS.values() if not r.done]
 MAX_RUNS = 40
 
 
@@ -380,6 +450,7 @@ async def _pump(run: Run, proc, fmt: str) -> None:
     finally:
         run.done = True
         run.emit({"type": "end", "error": run.error})
+        run.persist()
 
 
 async def stream(run: Run, from_index: int = 0) -> AsyncIterator[str]:

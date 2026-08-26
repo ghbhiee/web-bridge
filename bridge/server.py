@@ -371,6 +371,7 @@ async def health():
         "sites": list(config.SITES.keys()),
         "inflight": [{"target": k, **v, "seconds": round(time.time() - v["started"], 1)}
                      for k, v in hub.inflight.items()],
+        "live_agent_runs": agents.live_runs(),
         "version": BUILD_AT_START.get("version"),
         "build": build,
         # spelled out so `curl /health | grep stale` is enough to catch the
@@ -969,6 +970,9 @@ def main():
         print(f"[web-bridge] 端口 {config.PORT} 被别的程序占用（lsof -i :{config.PORT} 看是谁）；"
               f"腾出端口后会自动重试", file=sys.stderr)
         raise SystemExit(1)              # non-zero → launchd retries after ThrottleInterval
+    restored = agents.restore_runs()
+    if restored:
+        print(f"[web-bridge] 恢复了 {restored} 条 agent 运行记录")
     print(f"[web-bridge] {time.strftime('%Y-%m-%d %H:%M:%S')} v{VERSION} "
           f"code:{BUILD_AT_START['code_sha256']} pid:{os.getpid()} "
           f"http://{config.HOST}:{config.PORT}  ws:/ws/ext  token:{'set' if config.TOKEN else 'MISSING'}")

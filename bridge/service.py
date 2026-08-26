@@ -165,13 +165,17 @@ def guard_inflight(args, what: str) -> bool:
     if getattr(args, "force", False):
         return True
     running = inflight()
-    if not running:
+    live = live_agent_runs()
+    if not running and not live:
         return True
-    print(f"⛔ 拒绝{what}：服务上还有 {len(running)} 个命令在跑，"
-          f"现在重启会让调用方收到 RemoteDisconnected、结果丢掉：", file=sys.stderr)
+    print(f"⛔ 拒绝{what}：服务上还有活在跑，现在重启会打断它们：", file=sys.stderr)
     for v in running:
-        print(f"   · 目标 {v.get('target')}  {v.get('action')}"
+        print(f"   · 页面命令 目标 {v.get('target')}  {v.get('action')}"
               f"{'/' + v['method'] if v.get('method') else ''}  已 {v.get('seconds')}s", file=sys.stderr)
+    for rid in live:
+        # an agent run is minutes of work and real quota; killing one silently
+        # is what made a user's task simply produce nothing
+        print(f"   · 侧栏 agent 任务 {rid}（重启会杀掉它，已产生的输出会留在历史里）", file=sys.stderr)
     print("   等它跑完，或确认要打断就加 --force。", file=sys.stderr)
     return False
 
@@ -232,6 +236,11 @@ def cmd_uninstall(args) -> int:
     free_port()
     print("服务已卸载（wb 命令仍会按需临时拉起 server）")
     return 0
+
+
+def live_agent_runs() -> list:
+    h = health()
+    return (h or {}).get("live_agent_runs") or []
 
 
 def cmd_restart(args) -> int:

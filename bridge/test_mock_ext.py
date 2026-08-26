@@ -428,6 +428,28 @@ async def main():
     # rounds of changes before keeping anything.
     results.append(("agents.brief_forbids_unprompted_save", "不要自己保存" in brief))
 
+    # a run must survive the bridge restarting under it: history used to live
+    # only in memory, so a restart to pick up a code change killed the running
+    # agent AND erased what it had already produced — from the panel that looked
+    # like the agent had simply done nothing.
+    import agents as _agents3, json as _json3, time as _time3
+    probe = _agents3.Run("__wb-test-run", "claude", "restart 存活验证", "/tmp")
+    probe.emit({"type": "text", "text": "半路的输出"})
+    probe.persist()
+    _agents3.RUNS.pop("__wb-test-run", None)
+    on_disk = (_agents3.RUN_DIR / "__wb-test-run.json").exists()
+    _agents3.restore_runs()
+    back = _agents3.RUNS.get("__wb-test-run")
+    results.append(("agents.runs_survive_restart",
+                    on_disk and back is not None
+                    and any(e.get("text") == "半路的输出" for e in back.events)))
+    # …and one left running belongs to a process that is gone, so it is closed
+    # out with an explanation rather than hanging as "still running" forever
+    results.append(("agents.interrupted_run_explained",
+                    back is not None and back.done and "重启" in (back.error or "")))
+    (_agents3.RUN_DIR / "__wb-test-run.json").unlink(missing_ok=True)
+    _agents3.RUNS.pop("__wb-test-run", None)
+
     # a single oversized line must not kill a run (claude's stream-json puts a
     # whole event on one line; the 64KB default limit ended runs mid-flight)
     results.append(("agents.stream_limit_raised", _agents.STREAM_LIMIT >= 8 * 1024 * 1024))

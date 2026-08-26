@@ -287,6 +287,14 @@ payload 验证过：变成可见文本，不执行。
 
 - 三个 CLI 的流式格式不同：claude 是 stream-json、codex 是 JSONL、dsh 是纯文本，
   `parse_line()` 把它们归一成同一串事件（text / tool / done / end）
+- **run 会落盘**（`<state>/runs/*.json`，每 5 个事件写一次 + 结束时写一次，保留最近 40 条）。
+  以前只在内存里，于是**重启 bridge = 杀掉正在跑的 agent + 抹掉全部历史**，面板拿着一个
+  不存在的 run id，用户看到的是「agent 什么都没干」。我自己就这么干掉过用户一个跑了几分钟的
+  任务。现在：启动时 `restore_runs()` 读回来，上个进程留下的「还在跑」状态会被标成
+  「被 bridge 重启中断」并写进事件流——**说清楚发生了什么，而不是静默**。
+- **`wb service restart` 会拒绝打断正在跑的活**（页面命令 + 侧栏 agent 任务都算），
+  要打断得显式 `--force`。守卫在 `guard_inflight()` 里，和另一个会话为 chatgpt 结果
+  加的那道是同一个。
 - **子进程流的行长上限必须调大**：asyncio 默认 64KB/行，而 claude 的 stream-json
   一个事件就是一行，一个大工具结果就会让整个 run 以
   `Separator is not found, and chunk exceed the limit` 挂掉，**已经做完的活全丢**。
@@ -361,7 +369,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 56 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 58 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 
