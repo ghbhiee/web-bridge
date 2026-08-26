@@ -193,7 +193,11 @@ async def main():
     #     can clean its own tracks out of the real journal afterwards.
     import journal as _journal
     marker = "__wb_test_marker_7f3a__"
-    probe = f"// {marker}\nreturn 1"
+    # must be a script worth keeping: promotion now refuses one-liners that do
+    # not touch the page, so `return 1` is (correctly) never promoted
+    probe = (f"// {marker}\n"
+             'const rows = document.querySelectorAll(".item");\n'
+             'return {count: rows.length, first: rows[0]?.textContent || null};')
     runs, promoted = [], None
     for _ in range(3):
         code, data = await asyncio.to_thread(
@@ -216,7 +220,9 @@ async def main():
 
     # 22. reformatting a script must NOT look like a new one, or nothing would
     #     ever repeat often enough to be promoted
-    reformatted = f"// {marker} (reformatted)\nreturn   1"
+    reformatted = (f"// {marker} (reformatted)\n"
+                   'const rows = document.querySelectorAll( ".item" );\n'
+                   'return { count: rows.length, first: rows[0]?.textContent || null };')
     code, data = await asyncio.to_thread(
         http, "POST", "/exec", {"code": reformatted, "url": "https://example.com/"})
     results.append(("journal.normalises_formatting",
