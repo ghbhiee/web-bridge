@@ -177,36 +177,68 @@ def bookmarklet(script: dict) -> str:
 
 
 def bookmarklet_page(script: dict) -> str:
-    """A tiny self-contained page whose link can be dragged to the bookmarks bar.
+    """A self-contained page whose link can be dragged to the bookmarks bar.
 
-    Dragging is the only way to install a bookmarklet in Chrome — you cannot
-    paste `javascript:` into the address bar and you cannot create it through an
-    API. So the export has to be a page with a real anchor on it.
+    This file is meant to LEAVE this machine — mailed, put on a stick, dropped in
+    a chat — and be opened on a computer with no extension, no bridge and no
+    agent. So everything is inline: styles, the instructions, and the code
+    itself (inside the anchor's href). It has to explain itself to someone who
+    has never seen this project.
+
+    Dragging is the only way to install a bookmarklet in Chrome: a typed or
+    pasted `javascript:` URL is refused, and no API can create one.
     """
     import html as _html
     href = bookmarklet(script)
     name = script.get("name") or "web-bridge 脚本"
-    return f"""<!doctype html><meta charset="utf-8"><title>{_html.escape(name)} · 书签</title>
+    where = ", ".join(script.get("matches") or ["*"])
+    size = len(href)
+    return f"""<!doctype html><html lang="zh"><meta charset="utf-8">
+<title>{_html.escape(name)} · 书签小工具</title>
 <style>
- body{{font:15px/1.7 -apple-system,"PingFang SC",sans-serif;max-width:720px;margin:48px auto;padding:0 20px;color:#1a1a1a}}
- h1{{font-size:20px;margin:0 0 6px}} .sub{{color:#6b7280;font-size:13px;margin-bottom:24px}}
- .drag{{display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:10px 20px;
-        border-radius:8px;font-weight:600;cursor:grab}}
- .steps{{background:#f6f7f9;border-radius:10px;padding:14px 18px;margin:22px 0;font-size:14px}}
- code{{background:#eef0f3;border-radius:4px;padding:1px 5px;font-size:13px}}
- pre{{background:#f6f7f9;border-radius:10px;padding:14px;overflow:auto;font-size:12px;line-height:1.5}}
+ :root{{color-scheme:light dark}}
+ body{{font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+       max-width:680px;margin:0 auto;padding:48px 22px 80px;color:#1a1a1a;background:#fff}}
+ @media (prefers-color-scheme:dark){{body{{background:#16181c;color:#e6e6e6}}
+   .steps,pre{{background:#22262d !important}} code{{background:#2a2f37 !important}}
+   .sub,.foot{{color:#9aa0a6 !important}}}}
+ h1{{font-size:22px;margin:0 0 4px}}
+ .sub{{color:#6b7280;font-size:13px;margin-bottom:28px}}
+ .drop{{border:2px dashed #c7cbd1;border-radius:14px;padding:26px;text-align:center;margin-bottom:26px}}
+ .drag{{display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:12px 26px;
+        border-radius:9px;font-weight:600;font-size:15px;cursor:grab}}
+ .drag:active{{cursor:grabbing}}
+ .hint{{color:#6b7280;font-size:12.5px;margin-top:12px}}
+ .steps{{background:#f6f7f9;border-radius:12px;padding:16px 20px;margin:24px 0;font-size:14px}}
+ .steps li{{margin:6px 0}}
+ code{{background:#eef0f3;border-radius:4px;padding:1px 6px;font-size:13px}}
+ pre{{background:#f6f7f9;border-radius:12px;padding:14px;overflow:auto;font-size:12px;line-height:1.55}}
+ .foot{{color:#6b7280;font-size:12px;margin-top:36px;border-top:1px solid #e5e7eb;padding-top:14px}}
 </style>
 <h1>{_html.escape(name)}</h1>
-<div class="sub">web-bridge 导出的书签小工具 · 适用范围 {_html.escape(", ".join(script.get("matches") or ["*"]))}</div>
-<a class="drag" href="{_html.escape(href, quote=True)}">↧ 把我拖到书签栏</a>
-<div class="steps">
-  <b>怎么用</b><br>
-  1. 显示书签栏（Chrome: <code>⌘⇧B</code>）<br>
-  2. 把上面的蓝色按钮<b>拖</b>到书签栏——不能复制粘贴，浏览器不允许手输 <code>javascript:</code><br>
-  3. 到目标页面点一下这个书签，脚本就地执行<br>
-  换台电脑就把这个 HTML 文件带过去，或者存进网盘再打开。
+<div class="sub">一个书签小工具 · 适用页面：{_html.escape(where)} · {size:,} 字符</div>
+
+<div class="drop">
+  <a class="drag" href="{_html.escape(href, quote=True)}">↧ 拖我到书签栏</a>
+  <div class="hint">按住这个按钮，拖到浏览器的书签栏上松手</div>
 </div>
-<details><summary>脚本源码</summary><pre>{_html.escape(script.get("code") or "")}</pre></details>
+
+<div class="steps">
+  <b>怎么用（这台电脑不需要装任何东西）</b>
+  <ol>
+    <li>显示书签栏：Chrome / Edge 按 <code>⌘⇧B</code>（Windows 是 <code>Ctrl+Shift+B</code>）</li>
+    <li>把上面的蓝色按钮<b>拖</b>到书签栏——不能复制粘贴，浏览器不允许手动输入
+        <code>javascript:</code> 开头的书签</li>
+    <li>打开目标网页，点一下书签栏上的它，脚本就在当前页面执行</li>
+  </ol>
+</div>
+
+<details><summary>看看它做了什么（源码）</summary>
+<pre>{_html.escape(script.get("code") or "")}</pre></details>
+
+<div class="foot">这个文件是自包含的：直接双击打开就行，不联网、不依赖任何扩展或插件，
+换电脑复制过去照样能用。由 web-bridge 导出。</div>
+</html>
 """
 
 

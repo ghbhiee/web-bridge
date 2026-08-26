@@ -394,10 +394,19 @@ async def main():
     # a script has to be able to leave this machine: export it as a bookmarklet
     code, data = await asyncio.to_thread(http, "GET", f"/user-script/{uid}/bookmarklet")
     url = data.get("url", "")
+    html = data.get("html", "")
     results.append(("user_scripts.bookmarklet_export",
                     code == 200 and url.startswith("javascript:")
                     and "\n" not in url and " " not in url        # must survive a bookmark URL
-                    and 'class="drag"' in data.get("html", "")))   # draggable, the only way to install
+                    and 'class="drag"' in html))                   # draggable, the only way to install
+
+    # the export exists to leave this machine: it must open on a computer with no
+    # extension, no bridge and no network, so nothing may be fetched from outside
+    body = html.replace(url, "")                    # the code itself is not a dependency
+    results.append(("user_scripts.export_is_self_contained",
+                    "http://" not in body and "https://" not in body
+                    and "<script" not in body       # no external or inline script needed
+                    and "怎么用" in body))          # explains itself to a stranger
 
     # the agent needs a way to remove a script it replaced — without one it
     # renamed a script to "(可删除)" and left it auto-running

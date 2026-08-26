@@ -261,10 +261,16 @@ payload 验证过：变成可见文本，不执行。
 「页面」标签里出现这个脚本 → 刷新自动生效 → 关掉自动运行后刷新完全还原 → 手动运行按钮可用。
 
 **导出书签**：「页面」标签每条脚本有个「书签」按钮 → `GET /user-script/{id}/bookmarklet`
-生成 `javascript:` URL 和一个带**可拖拽链接**的页面。必须是拖的：Chrome 不允许手输或粘贴
-`javascript:` 书签，也没有 API 能建，所以导出只能是一个页面。存的代码是函数体
-（可能 `await`、可能顶层 `return`），包成 async IIFE 才不会一点就语法错误。
-这样脚本可以带到别的电脑上用。
+→ **下载一个 .html 文件**。
+
+要点是这个文件**要离开这台机器**：发到没装扩展、没有 bridge、没有 agent 的电脑上双击打开，
+把按钮拖进书签栏就能用。所以页面必须完全自包含——样式内联、代码在锚点的 href 里、
+不联网、没有 `<script>`、并且要能向一个从没听说过这个项目的人解释清楚自己是什么
+（回归测试就是按这几条查的）。
+
+早期版本用 blob URL 直接开标签页，**那个 URL 关掉就没了、发不出去**，等于没解决问题。
+两个不能省的细节：必须是**拖**（Chrome 拒绝手输/粘贴 `javascript:` 书签，也没 API 能建）；
+存的代码是函数体（可能 `await`、可能顶层 `return`），要包成 async IIFE 才不会一点就语法错。
 
 **中文输入法**：`Enter` 在候选词窗口开着时属于输入法（选词），当成发送会把半截拼音发出去。
 `keydown` 里先看 `isComposing` / `keyCode === 229` / `compositionstart-end` 三个信号
@@ -369,7 +375,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 58 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 59 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

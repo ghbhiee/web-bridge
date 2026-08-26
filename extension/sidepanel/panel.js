@@ -697,14 +697,28 @@ function showUserResult(name, result) {
 }
 
 async function exportBookmarklet(u) {
-  // Opened as a page rather than copied to the clipboard on purpose: Chrome
-  // refuses a hand-typed or pasted `javascript:` bookmark, so the only way to
-  // install one is to DRAG a real anchor — which means there has to be a page.
+  // Downloads a real file rather than opening a blob: tab. The point of the
+  // export is to carry the script to a machine that has none of this installed —
+  // a blob URL dies with the tab and cannot be sent anywhere. The file is
+  // self-contained (inline styles, the code inside the anchor's href), so it
+  // works from a USB stick, a chat attachment or a mail attachment, on a browser
+  // with no extension at all.
+  //
+  // Chrome refuses a hand-typed or pasted `javascript:` bookmark, so the page
+  // has to carry a real anchor to DRAG — that is why the export is a page and
+  // not just a string.
   try {
     const data = await api(`/user-script/${encodeURIComponent(u.id)}/bookmarklet`);
+    const file = (u.name || "bookmarklet").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60) + ".html";
     const url = URL.createObjectURL(new Blob([data.html], { type: "text/html" }));
-    await chrome.tabs.create({ url });
-    toast("已打开书签页：把蓝色按钮拖到书签栏", 3000);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast(`已下载 ${file} — 发到别的电脑打开，把按钮拖到书签栏`, 4000);
   } catch (e) {
     toast("导出失败：" + e.message, 2600);
   }
