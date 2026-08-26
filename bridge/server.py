@@ -465,6 +465,31 @@ async def list_results(limit: int = 20):
     return {"ok": True, "results": results.recent(limit)}
 
 
+def _tools_for_host_hint(url: str) -> Optional[dict]:
+    """Tell an exec caller that this page already has purpose-built tools.
+
+    The briefing does this for side-panel runs, but an agent driving the MCP
+    from a terminal never sees a briefing — and that is where the reinventing
+    was actually happening: eleven hand-written scripts on a site whose exact
+    capability was sitting in the library, with the discovery call never made.
+    A hint on the exec result reaches every caller, at the moment it is doing
+    the thing by hand.
+    """
+    if not url:
+        return None
+    try:
+        site = [c for c in capabilities.for_url(url) if c.get("match") != ["*"]]
+    except Exception:  # noqa: BLE001
+        return None
+    if not site:
+        return None
+    return {
+        "note": "这个页面有专门为它写的 Agent Tools，下次可以直接 web_run_capability，不用自己写 JS",
+        "tools": [{"id": c["id"], "title": c.get("title") or "",
+                   "params": list((c.get("params") or {}).keys())} for c in site[:5]],
+    }
+
+
 class ExecReq(BaseModel):
     code: str                              # function body; `args` is in scope, may `return`
     args: Any = None
@@ -529,11 +554,16 @@ async def exec_js(req: ExecReq):
                        site=req.site or "", ok=False, error=str(e.detail),
                        ms=int((time.monotonic() - started) * 1000))
         raise
+    landed = data.get("tab_url") or req.url or ""
     note = journal.record(kind="exec", code=req.code, args=req.args,
-                          url=data.get("tab_url") or req.url or "",
+                          url=landed,
                           site=req.site or "", ok=True, result=data.get("result"),
                           ms=int((time.monotonic() - started) * 1000))
-    return JSONResponse({"ok": True, **data, "journal": note})
+    payload = {"ok": True, **data, "journal": note}
+    hint = _tools_for_host_hint(landed)
+    if hint:
+        payload["tools_available"] = hint
+    return JSONResponse(payload)
 
 
 class AdapterReq(BaseModel):

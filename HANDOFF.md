@@ -232,6 +232,10 @@ MCP 工具名：`web_capabilities`（带 `capability` 参数则返回单个能�
 payload 验证过：变成可见文本，不执行。
 
 **怎么让 Agent Tools 更容易命中**（实测有效的顺序）：
+0. **hint 必须放在所有调用方都看得到的地方**。简报只对**侧栏发起**的 run 生效，
+   而实际重复造轮子发生在 dsh / 终端里的 MCP 客户端——那条路没有简报。
+   所以 `/exec` 的**返回值**里带 `tools_available`：这个站有专属能力时，
+   在 agent 正在手写 JS 的那一刻告诉它。没有专属能力就不带，否则变成噪音。
 1. **把工具直接塞进简报**（`agents.available_tools_block`）——不要让 agent 去「想起来问」。
    面板知道 URL，bridge 就能把这个站点已有的能力（名字/参数/说明）写进 system prompt。
    实测：同一个问题，之前 1 次能力调用 + 32 次现写；加了这块之后 **2 次能力调用、0 次现写**，
@@ -443,7 +447,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 72 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 74 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

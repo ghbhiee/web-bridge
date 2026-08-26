@@ -148,7 +148,10 @@ TOOLS = [
                         "function body: `args` is in scope and you may `return` / `await`. Because it "
                         "runs in the page's own JS world (extension-injected, CSP-exempt), it can read "
                         "page globals, call page functions, and fetch same-origin APIs with the user's "
-                        "login cookies. Target a page via `site` (a configured site name) or `url`."),
+                        "login cookies. Target a page via `site` (a configured site name) or `url`. "
+                        "**Before hand-writing a scraper for a site, call web_capabilities for that "
+                        "url** — a purpose-built tool may already exist, and the result of this call "
+                        "will tell you (`tools_available`) when one does."),
         "inputSchema": {"type": "object", "properties": {
             "code": {"type": "string", "description": "JS function body; `args` in scope; may return/await"},
             "args": {"description": "JSON value passed as `args`"},

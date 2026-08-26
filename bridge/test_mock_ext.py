@@ -438,6 +438,25 @@ async def main():
                     and not _j6.looks_trivial(
                         'document.querySelectorAll(".ad").forEach(e=>e.remove()); return {n:1}')))
 
+    # A briefing only reaches side-panel runs. The reinventing was happening in a
+    # terminal MCP client, which never sees one — eleven hand-written scripts on
+    # a site whose capability was sitting right there, discovery never called.
+    # So the exec RESULT has to carry the hint: every caller sees that.
+    meta_hint = dict(meta, id="__wb-test-hinted", match=["example.com"], autorun=False)
+    src_hint = "/* @web-bridge-capability\n" + _json.dumps(meta_hint) + "\n*/\nreturn 1;"
+    await asyncio.to_thread(http, "PUT", "/capability/__wb-test-hinted", {"source": src_hint})
+    code, data = await asyncio.to_thread(
+        http, "POST", "/exec", {"code": "return 1", "url": "https://example.com/"})
+    hint = data.get("tools_available") or {}
+    results.append(("exec.hints_existing_tools",
+                    code == 200 and any(t["id"] == "__wb-test-hinted" for t in hint.get("tools", []))))
+    await asyncio.to_thread(http, "DELETE", "/capability/__wb-test-hinted")
+
+    # …and stays quiet where nothing site-specific exists, or it becomes noise
+    code, data = await asyncio.to_thread(
+        http, "POST", "/exec", {"code": "return 1", "url": "https://nothing-here-xyz.test/"})
+    results.append(("exec.no_hint_without_tools", "tools_available" not in data))
+
     # the single biggest lever on whether a saved tool gets used: hand it to the
     # agent in the briefing instead of making it think to ask. Measured on a real
     # run — before: 1 capability call then 32 hand-written scripts; after: 2
