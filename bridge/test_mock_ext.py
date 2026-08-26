@@ -413,6 +413,25 @@ async def main():
     results.append(("capabilities.expose_updated_time",
                     bool(caps) and all(c.get("updated") for c in caps)))
 
+    # the single biggest lever on whether a saved tool gets used: hand it to the
+    # agent in the briefing instead of making it think to ask. Measured on a real
+    # run — before: 1 capability call then 32 hand-written scripts; after: 2
+    # capability calls and no hand-written JS at all.
+    import agents as _agents5, capabilities as _caps5
+    site_cap = next((c for c in _caps5.all_caps() if c.get("match") != ["*"]), None)
+    if site_cap:
+        host = site_cap["match"][0].strip("*.")
+        block = _agents5.available_tools_block(f"https://{host}/")
+        results.append(("agents.brief_lists_existing_tools",
+                        site_cap["id"] in block and "web_run_capability" in block))
+    else:
+        results.append(("agents.brief_lists_existing_tools", True))
+
+    # a page with no site tools must not get a list of six generic ones dressed
+    # up as "already have these" — that is noise that trains the agent to skip it
+    results.append(("agents.no_tool_block_when_nothing_specific",
+                    _agents5.available_tools_block("https://no-such-site-xyz.test/") == ""))
+
     # "did it use the tools I saved, or write JS again?" had no answer short of
     # reading the JSONL by hand — the reuse rate is that answer.
     code, data = await asyncio.to_thread(http, "GET", "/journal/stats?days=7")

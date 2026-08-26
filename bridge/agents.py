@@ -134,12 +134,67 @@ PANEL_BRIEF = """你正在 web-bridge 的浏览器侧栏里被调用，不是在
 """
 
 
+def available_tools_block(url: str) -> str:
+    """List the tools that already exist for THIS page, inside the briefing.
+
+    Discovery was a tool call the agent had to think of making, and a list of
+    six generic capabilities is easy to skim past on the way to writing fresh
+    JS. Putting the site-specific ones in front of it — by name, with what they
+    do and what they take — removes the step entirely: the agent cannot fail to
+    notice a tool it was handed.
+    """
+    try:
+        import capabilities
+        import user_scripts
+        caps = capabilities.for_url(url)
+    except Exception:  # noqa: BLE001
+        return ""
+    site = [c for c in caps if c.get("match") != ["*"]]
+    if not site:
+        return ""
+    lines = ["", "**这个页面已经有现成的 Agent Tools，优先用它们，别重写：**"]
+    for c in site[:8]:
+        params = ", ".join((c.get("params") or {}).keys())
+        lines.append(f"- `{c['id']}` — {c.get('title') or ''}"
+                     f"{'（参数：' + params + '）' if params else ''}")
+        desc = (c.get("description") or "").strip().replace("\n", " ")
+        if desc:
+            lines.append(f"    {desc[:150]}")
+    lines.append("")
+    lines.append("用 `web_run_capability` 调它们。确实不合用再自己写——"
+                 "写完如果这活儿以后还会做，问用户要不要存成 Agent Tool。")
+    return "\n".join(lines)
+
+
+def adhoc_hint(url: str) -> str:
+    """If this site keeps getting hand-written JS and has no tool, say so."""
+    try:
+        import journal
+        import capabilities
+        host = journal.host_of(url)
+        if not host:
+            return ""
+        if any(c.get("match") != ["*"] for c in capabilities.for_url(url)):
+            return ""                       # it has tools; that is the other problem
+        stats = journal.usage_stats(30, host)
+        if stats["adhoc_execs"] < 8:
+            return ""
+        return ("\n**注意**：这个站点最近 30 天被现写了 " + str(stats["adhoc_execs"]) +
+                " 次 JS，却没有任何 Agent Tool。这活儿要是还会再做，"
+                "做完主动问用户：要不要把它存成 Agent Tool（`web_save_capability`），"
+                "下次就不用从头探页面了。\n")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def panel_brief(context: Optional[dict]) -> str:
     """The briefing text for a run started from the side panel."""
     c = context or {}
     if not c.get("url"):
         return ""
-    return PANEL_BRIEF.format(title=c.get("title") or "(无标题)", url=c["url"])
+    return (PANEL_BRIEF.format(title=c.get("title") or "(无标题)", url=c["url"])
+            + available_tools_block(c["url"])
+            + adhoc_hint(c["url"]))
 
 
 def detect(cwd: Optional[str] = None, full_access: bool = True) -> dict:

@@ -300,6 +300,19 @@ def search(query: str = "", host: str = "", limit: int = 10,
     return rows[:limit]
 
 
+def record_discovery(url: str, offered: int, site_specific: int) -> None:
+    """Note that someone asked what a page can do.
+
+    Runs were journalled but discovery was not, so "the agent wrote JS instead
+    of using the tool" could not be told apart from "the agent never looked" —
+    and those need opposite fixes.
+    """
+    entry = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": "discover",
+             "host": host_of(url), "url": (url or "")[:300], "ok": True,
+             "offered": offered, "site_specific": site_specific}
+    _append(entry)
+
+
 def usage_stats(days: int = 7, host: str = "") -> dict:
     """Are the saved tools actually being used, or is everything hand-written?
 
@@ -345,10 +358,28 @@ def usage_stats(days: int = 7, host: str = "") -> dict:
     cap = by_kind.get("capability", 0)
     adhoc = by_kind.get("exec", 0)
     total = cap + adhoc
+    # Sites where JS keeps getting written and no capability exists are a supply
+    # problem (nothing to hit); sites with capabilities that still get ad-hoc JS
+    # are a targeting problem. They need opposite fixes, so name them apart.
+    import capabilities as _caps
+    gaps = []
+    for h in sorted(hosts, key=lambda k: hosts[k].get("exec", 0), reverse=True):
+        if hosts[h].get("exec", 0) < 5 or h == "?":
+            continue
+        has_site_tool = any(
+            c.get("match") != ["*"] and any(m.strip("*.") in h for m in (c.get("match") or []))
+            for c in _caps.all_caps())
+        gaps.append({"host": h, "adhoc": hosts[h]["exec"],
+                     "capability_runs": hosts[h].get("capability", 0),
+                     "has_site_tool": has_site_tool})
     return {
         "days": days,
         "capability_runs": cap,
         "adhoc_execs": adhoc,
+        "discoveries": by_kind.get("discover", 0),
+        # sites doing ad-hoc work: with no tool = nothing to hit, with a tool =
+        # the tool is not being reached for
+        "gaps": gaps[:6],
         "user_script_runs": by_kind.get("user-script", 0),
         # the number that answers "is the library earning its keep"
         "reuse_rate": round(cap / total, 3) if total else 0.0,

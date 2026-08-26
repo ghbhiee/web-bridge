@@ -606,6 +606,9 @@ async def list_capabilities(url: str = "", site: str = ""):
     # Discovery is the moment to say "this has been done here before". Putting it
     # here rather than in prose means an agent that never read the skill still
     # finds the trodden path, without having to know the journal exists.
+    if url:
+        journal.record_discovery(url, len(caps),
+                                 sum(1 for c in caps if c.get("match") != ["*"]))
     prior = journal.search(host=journal.host_of(url), limit=5) if url else []
     if prior:
         out["prior_scripts"] = [

@@ -231,6 +231,19 @@ MCP 工具名：`web_capabilities`（带 `capability` 参数则返回单个能�
 几种行内格式**——从页面文本到活markup 没有通路。真机用 `<img onerror>` / `<script>`
 payload 验证过：变成可见文本，不执行。
 
+**怎么让 Agent Tools 更容易命中**（实测有效的顺序）：
+1. **把工具直接塞进简报**（`agents.available_tools_block`）——不要让 agent 去「想起来问」。
+   面板知道 URL，bridge 就能把这个站点已有的能力（名字/参数/说明）写进 system prompt。
+   实测：同一个问题，之前 1 次能力调用 + 32 次现写；加了这块之后 **2 次能力调用、0 次现写**，
+   而且它连 `web_capabilities` 都没调——工具是被递到手上的，没有「想不起来」的余地。
+2. **只列站点专属的**。把 6 个通用能力也堆进去等于噪音，会训练 agent 跳过这一段。
+3. **供给不足要单独说**（`agents.adhoc_hint`）：某站现写超过 8 次且一个站点能力都没有，
+   简报里直接提醒 agent 做完问用户要不要沉淀。
+
+**两种失败必须分开看**（`wb stats` 分了两栏）：
+- **缺工具**：这个站根本没有站点能力 → 现写多少次都不是「没命中」，是没得命中
+- **没命中**：有工具却没被调用 → 才是命中问题
+
 **复用率**：`wb stats`（面板 Agent Tools 标签顶部也有）——存下来的工具到底有没有被用上，
 还是每次都在现写 JS。这个数字是「能力库有没有价值」的唯一诚实答案；低于 20% 会标红。
 以前只能手翻 `exec-log.jsonl` 才知道，等于没人知道。
@@ -422,7 +435,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 68 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 70 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

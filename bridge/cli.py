@@ -244,10 +244,24 @@ def cmd_stats(args):
                   + ("" if t["ok"] == t["runs"] else f" · 失败 {t['runs']-t['ok']} 次"))
     else:
         print("\n  这段时间没有任何 Agent Tool 被调用过。")
+    if d.get("discoveries") is not None:
+        print(f"  问过「这页有什么能力」  {d['discoveries']:>3} 次")
     if d["hosts"]:
         print("\n  按站点（能力 / 现写 / 页面脚本）：")
         for h in d["hosts"][:6]:
             print(f"    {h['host']:<28} {h['capability']:>3} / {h['exec']:>3} / {h['user-script']:>3}")
+    # The two failure modes need opposite fixes, so never show them as one number
+    gaps = d.get("gaps") or []
+    missing = [g for g in gaps if not g["has_site_tool"]]
+    unused = [g for g in gaps if g["has_site_tool"] and g["capability_runs"] == 0]
+    if missing:
+        print("\n  ⚠️  这些站点一直在现写 JS，但没有任何 Agent Tool（缺工具）：")
+        for g in missing:
+            print(f"    {g['host']:<28} 现写 {g['adhoc']} 次 — 值得沉淀一个能力")
+    if unused:
+        print("\n  ⚠️  这些站点有工具却没被调用（工具没命中）：")
+        for g in unused:
+            print(f"    {g['host']:<28} 现写 {g['adhoc']} 次，能力 0 次")
     return 0
 
 
