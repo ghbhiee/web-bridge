@@ -177,7 +177,11 @@ def adhoc_hint(url: str) -> str:
         if any(c.get("match") != ["*"] for c in capabilities.for_url(url)):
             return ""                       # it has tools; that is the other problem
         stats = journal.usage_stats(30, host)
-        if stats["adhoc_execs"] < 8:
+        gap = next((g for g in stats.get("gaps", []) if g["host"] == host), None)
+        # Writing a page script is dozens of distinct one-off probes. Telling the
+        # agent to "save this as a capability" because of that is noise — a real
+        # gap is the SAME work done repeatedly.
+        if not gap or gap["looks_like_authoring"] or gap["repeats"] < 2:
             return ""
         return ("\n**注意**：这个站点最近 30 天被现写了 " + str(stats["adhoc_execs"]) +
                 " 次 JS，却没有任何 Agent Tool。这活儿要是还会再做，"

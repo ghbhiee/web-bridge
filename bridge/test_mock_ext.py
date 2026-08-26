@@ -413,6 +413,25 @@ async def main():
     results.append(("capabilities.expose_updated_time",
                     bool(caps) and all(c.get("updated") for c in caps)))
 
+    # building a page script is dozens of one-off probes; counting that as
+    # "this site needs a capability" made the tool nag about work nobody
+    # repeated. A real gap is REPETITION, not volume.
+    import journal as _j6
+    st6 = _j6.usage_stats(30)
+    authoring = [g for g in st6.get("gaps", [])
+                 if g["distinct"] >= max(5, g["adhoc"] * 0.8) and g["repeats"] <= 1]
+    results.append(("journal.separates_authoring_from_gaps",
+                    all(g["looks_like_authoring"] for g in authoring)))
+
+    # and auto-promotion must not turn debugging one-liners into capabilities:
+    # `location.reload()` repeated during development became one, titled
+    # "🤖 location.reload();return 1"
+    results.append(("journal.rejects_trivial_promotions",
+                    _j6.looks_trivial("location.reload(); return 1")
+                    and _j6.looks_trivial("return document.title")
+                    and not _j6.looks_trivial(
+                        'document.querySelectorAll(".ad").forEach(e=>e.remove()); return {n:1}')))
+
     # the single biggest lever on whether a saved tool gets used: hand it to the
     # agent in the briefing instead of making it think to ask. Measured on a real
     # run — before: 1 capability call then 32 hand-written scripts; after: 2

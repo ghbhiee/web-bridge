@@ -252,16 +252,25 @@ def cmd_stats(args):
             print(f"    {h['host']:<28} {h['capability']:>3} / {h['exec']:>3} / {h['user-script']:>3}")
     # The two failure modes need opposite fixes, so never show them as one number
     gaps = d.get("gaps") or []
-    missing = [g for g in gaps if not g["has_site_tool"]]
-    unused = [g for g in gaps if g["has_site_tool"] and g["capability_runs"] == 0]
+    authoring = [g for g in gaps if g.get("looks_like_authoring")]
+    missing = [g for g in gaps if not g.get("looks_like_authoring") and not g["has_site_tool"]]
+    unused = [g for g in gaps
+              if not g.get("looks_like_authoring") and g["has_site_tool"] and g["capability_runs"] == 0]
     if missing:
-        print("\n  ⚠️  这些站点一直在现写 JS，但没有任何 Agent Tool（缺工具）：")
+        print("\n  ⚠️  同样的活反复现写，却没有 Agent Tool（缺工具）：")
         for g in missing:
-            print(f"    {g['host']:<28} 现写 {g['adhoc']} 次 — 值得沉淀一个能力")
+            print(f"    {g['host']:<26} 现写 {g['adhoc']} 次 · 其中重复 {g['repeats']} 次 — 值得沉淀")
     if unused:
-        print("\n  ⚠️  这些站点有工具却没被调用（工具没命中）：")
+        print("\n  ⚠️  有工具却没被调用（没命中）：")
         for g in unused:
-            print(f"    {g['host']:<28} 现写 {g['adhoc']} 次，能力 0 次")
+            print(f"    {g['host']:<26} 现写 {g['adhoc']} 次 · 重复 {g['repeats']} 次，能力 0 次")
+    if authoring:
+        # Every script different, each run once: that is someone building a page
+        # script, not a task a capability could have absorbed. Counting it as a
+        # gap made the tool nag about work that was never repeated.
+        print("\n  ℹ️  这些站点的现写是「开发调试」（每段都不一样、没重复），不算缺工具：")
+        for g in authoring:
+            print(f"    {g['host']:<26} {g['adhoc']} 次现写 / {g['distinct']} 段不同脚本 / {g['days']} 天")
     return 0
 
 

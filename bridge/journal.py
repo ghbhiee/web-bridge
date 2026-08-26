@@ -234,6 +234,37 @@ def auto_id(host: str, sig: str) -> str:
     return f"auto-{slug}-{sig[:6]}"
 
 
+# Scripts that repeat but are not worth keeping. A capability is something an
+# agent should reach for later; `location.reload()` run twenty times during
+# debugging is not, and one of them did end up in the library titled
+# "🤖 location.reload();return 1".
+TRIVIAL_PATTERNS = (
+    "location.reload", "location.href=", "window.close", "document.title",
+    "return 1", "return true", "return null", "console.log",
+)
+
+
+def looks_trivial(code: str) -> bool:
+    """Is this repeated script actually worth becoming a capability?"""
+    body = normalise(code)
+    # Does it touch the page or the network at all? A script that only reads
+    # document.title or reloads is scaffolding no matter how often it repeats.
+    doing_something = any(k in body for k in (
+        "querySelector", "getElement", "fetch(", "XMLHttpRequest", "createElement",
+        "addEventListener", "innerHTML", "textContent", "style.", "classList",
+        "JSON.parse", "localStorage", "sessionStorage"))
+    if not doing_something:
+        return True
+    # Length is judged only AFTER that: a short script that really calls an API
+    # is a fine capability, while a long one that reloads in a loop is not.
+    if len(body) < 40:
+        return True
+    stripped = body
+    for pat in TRIVIAL_PATTERNS:
+        stripped = stripped.replace(pat, "")
+    return len(stripped) < 30
+
+
 def maybe_promote(slot: dict) -> Optional[str]:
     """Write a repeated script into the library. Deliberately automatic: relying
     on an agent to remember `save_capability` is exactly why the library never
@@ -241,7 +272,7 @@ def maybe_promote(slot: dict) -> Optional[str]:
     if slot.get("promoted_to") or slot["ok_runs"] < PROMOTE_AFTER:
         return None
     code = slot.get("code") or ""
-    if not code.strip():
+    if not code.strip() or looks_trivial(code):
         return None
     cap_id = auto_id(slot["host"], slot["sig"])
     if capabilities.get(cap_id):
@@ -361,17 +392,42 @@ def usage_stats(days: int = 7, host: str = "") -> dict:
     # Sites where JS keeps getting written and no capability exists are a supply
     # problem (nothing to hit); sites with capabilities that still get ad-hoc JS
     # are a targeting problem. They need opposite fixes, so name them apart.
+    # Raw exec count cannot tell a capability gap from ordinary development.
+    # Writing a page script is dozens of one-off probes — 37 scripts, 37 distinct
+    # signatures, each run once — and reading that as "this site needs a tool"
+    # sends the agent nagging about work that was never repeated. What marks a
+    # real gap is REPETITION: the same work done again and again.
     import capabilities as _caps
+    per_host_sigs: dict[str, dict[str, int]] = {}
+    per_host_days: dict[str, set] = {}
+    for r in rows:
+        if r.get("kind") != "exec":
+            continue
+        h = r.get("host") or "?"
+        sig = r.get("sig") or ""
+        per_host_sigs.setdefault(h, {})
+        per_host_sigs[h][sig] = per_host_sigs[h].get(sig, 0) + 1
+        per_host_days.setdefault(h, set()).add((r.get("t") or "")[:10])
+
     gaps = []
     for h in sorted(hosts, key=lambda k: hosts[k].get("exec", 0), reverse=True):
-        if hosts[h].get("exec", 0) < 5 or h == "?":
+        runs = hosts[h].get("exec", 0)
+        if runs < 5 or h == "?":
             continue
+        sigs = per_host_sigs.get(h, {})
+        distinct = len(sigs)
+        repeats = sum(v for v in sigs.values() if v > 1)
         has_site_tool = any(
             c.get("match") != ["*"] and any(m.strip("*.") in h for m in (c.get("match") or []))
             for c in _caps.all_caps())
-        gaps.append({"host": h, "adhoc": hosts[h]["exec"],
+        # every script different, each run once = someone was building something
+        # here, not repeating a task a tool could have done
+        authoring = distinct >= max(5, runs * 0.8) and repeats <= 1
+        gaps.append({"host": h, "adhoc": runs, "distinct": distinct,
+                     "repeats": repeats, "days": len(per_host_days.get(h, ())),
                      "capability_runs": hosts[h].get("capability", 0),
-                     "has_site_tool": has_site_tool})
+                     "has_site_tool": has_site_tool,
+                     "looks_like_authoring": authoring})
     return {
         "days": days,
         "capability_runs": cap,

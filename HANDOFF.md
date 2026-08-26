@@ -240,9 +240,17 @@ payload 验证过：变成可见文本，不执行。
 3. **供给不足要单独说**（`agents.adhoc_hint`）：某站现写超过 8 次且一个站点能力都没有，
    简报里直接提醒 agent 做完问用户要不要沉淀。
 
-**两种失败必须分开看**（`wb stats` 分了两栏）：
-- **缺工具**：这个站根本没有站点能力 → 现写多少次都不是「没命中」，是没得命中
+**三种情况必须分开看**（`wb stats` 分三栏），按「重复度」判而不是按次数：
+- **开发调试**：每段脚本都不一样、没有重复 → 这是在**写**一个页面脚本，不是缺工具。
+  37 次现写 / 37 段不同脚本就是这个形状。按次数判会把它误报成「该沉淀一个能力」，
+  然后简报去催 agent 沉淀一件从没重复过的事。
+- **缺工具**：同样的活反复现写（repeats 高）却没有站点能力 → 真的该沉淀
 - **没命中**：有工具却没被调用 → 才是命中问题
+
+**自动沉淀有门槛**（`journal.looks_trivial`）：不碰页面/网络的脚本（只 reload、只读
+`document.title`）再重复也不沉淀。真事故：我调试时反复刷新页面，
+`location.reload();return 1` 被沉淀成了一个叫「🤖 location.reload();return 1」的能力，
+还让 example.com 在统计里显示成「有工具没命中」。
 
 **复用率**：`wb stats`（面板 Agent Tools 标签顶部也有）——存下来的工具到底有没有被用上，
 还是每次都在现写 JS。这个数字是「能力库有没有价值」的唯一诚实答案；低于 20% 会标红。
@@ -435,7 +443,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 70 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 72 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 
