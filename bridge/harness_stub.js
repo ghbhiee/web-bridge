@@ -32,6 +32,10 @@ async function api(path, opts = {}) {
     return { ok: true, result: { __echo_params: JSON.parse(opts.body || "{}").params } };
   }
   if (path.startsWith("/exec")) return { ok: true, result: "harness exec result" };
+  if (path.startsWith("/user-scripts/export")) return { kind: "web-bridge/user-scripts", version: 1, scripts: [{ id: "u_demo", name: "隐藏侧边栏", code: "return 1" }] };
+  if (path.startsWith("/user-scripts/import")) return { ok: true, added: ["新脚本"], replaced: [], renamed: ["旧的（导入）"], skipped: [] };
+  if (path.startsWith("/capabilities/export")) return { kind: "web-bridge/capabilities", version: 1, capabilities: [{ id: "extract-tables", source: "/* x */" }] };
+  if (path.startsWith("/capabilities/import")) return { ok: true, added: ["新能力"], replaced: [], skipped: ["extract-tables"] };
   if (path.startsWith("/user-scripts")) return { ok: true, total: 1, scripts: [
     { id: "u_demo", name: "隐藏侧边栏", code: "document.querySelector('.sidebar')?.remove();\nreturn {hidden:true};",
       matches: ["example.com"], autorun: true,

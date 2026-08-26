@@ -176,6 +176,51 @@ def set_autorun(script_id: str, on: bool) -> dict:
     return save(s)
 
 
+BUNDLE_KIND = "web-bridge/user-scripts"
+
+
+def export_bundle(ids: Optional[list[str]] = None) -> dict:
+    """Everything needed to restore these scripts on another machine."""
+    scripts = all_scripts()
+    if ids:
+        wanted = set(ids)
+        scripts = [s for s in scripts if s["id"] in wanted]
+    return {"kind": BUNDLE_KIND, "version": 1,
+            "exported": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "scripts": scripts}
+
+
+def import_bundle(data: dict, overwrite: bool = False) -> dict:
+    """Load a bundle. Existing ids are kept apart unless overwrite is asked for.
+
+    Importing must never quietly replace work: by default a script whose id is
+    already here is saved as a new entry with its name marked, so the user can
+    compare and delete the one they don't want.
+    """
+    if not isinstance(data, dict) or data.get("kind") != BUNDLE_KIND:
+        raise ValueError("这不是 web-bridge 的脚本导出文件")
+    incoming = data.get("scripts") or []
+    if not isinstance(incoming, list):
+        raise ValueError("导出文件里没有 scripts 列表")
+    here = {s["id"] for s in all_scripts()}
+    added, replaced, renamed = [], [], []
+    for item in incoming:
+        if not isinstance(item, dict) or not (item.get("code") or "").strip():
+            continue
+        rec = dict(item)
+        if rec.get("id") in here and not overwrite:
+            rec["id"] = None                       # save() mints a fresh one
+            rec["name"] = (rec.get("name") or "未命名") + "（导入）"
+            saved = save(rec)
+            renamed.append(saved["name"])
+        else:
+            was_here = rec.get("id") in here
+            saved = save(rec)
+            (replaced if was_here else added).append(saved["name"])
+    return {"added": added, "replaced": replaced, "renamed": renamed,
+            "total": len(all_scripts())}
+
+
 def bookmarklet(script: dict) -> str:
     """Wrap a script as a `javascript:` URL.
 

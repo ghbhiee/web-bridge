@@ -734,6 +734,44 @@ async def user_script_autorun(script_id: str, req: AutorunReq):
     return {"ok": True, "script": rec}
 
 
+class ImportReq(BaseModel):
+    data: dict
+    overwrite: bool = False
+
+
+@app.get("/user-scripts/export", dependencies=[Depends(require_token)])
+async def export_user_scripts(ids: str = ""):
+    """Whole library, or `?ids=a,b`. Plain JSON so it can be diffed and edited."""
+    wanted = [i for i in ids.split(",") if i] or None
+    return user_scripts.export_bundle(wanted)
+
+
+@app.post("/user-scripts/import", dependencies=[Depends(require_token)])
+async def import_user_scripts(req: ImportReq):
+    try:
+        report = user_scripts.import_bundle(req.data, req.overwrite)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    hub.notify("sync-autorun")
+    return {"ok": True, **report}
+
+
+@app.get("/capabilities/export", dependencies=[Depends(require_token)])
+async def export_capabilities(ids: str = ""):
+    wanted = [i for i in ids.split(",") if i] or None
+    return capabilities.export_bundle(wanted)
+
+
+@app.post("/capabilities/import", dependencies=[Depends(require_token)])
+async def import_capabilities(req: ImportReq):
+    try:
+        report = capabilities.import_bundle(req.data, req.overwrite)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    hub.notify("sync-autorun")
+    return {"ok": True, **report}
+
+
 @app.get("/user-script/{script_id}/bookmarklet", dependencies=[Depends(require_token)])
 async def user_script_bookmarklet(script_id: str):
     """Export as a bookmarklet, so a script can travel to another machine.

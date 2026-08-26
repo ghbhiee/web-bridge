@@ -413,6 +413,33 @@ async def main():
     results.append(("capabilities.expose_updated_time",
                     bool(caps) and all(c.get("updated") for c in caps)))
 
+    # a whole library must be able to move to another machine, and importing
+    # must never quietly overwrite work that is already here
+    code, bundle = await asyncio.to_thread(http, "GET", "/user-scripts/export")
+    results.append(("user_scripts.export_bundle",
+                    code == 200 and bundle.get("kind") == "web-bridge/user-scripts"
+                    and any(x["id"] == uid for x in bundle.get("scripts", []))))
+
+    code, data = await asyncio.to_thread(
+        http, "POST", "/user-scripts/import", {"data": bundle, "overwrite": False})
+    # same ids already present → kept apart under a marked name, nothing replaced
+    results.append(("user_scripts.import_never_clobbers",
+                    code == 200 and not data.get("replaced") and bool(data.get("renamed"))))
+    for name in data.get("renamed", []):
+        code2, listing = await asyncio.to_thread(http, "GET", "/user-scripts")
+        for sc in listing.get("scripts", []):
+            if sc["name"] == name:
+                await asyncio.to_thread(http, "DELETE", f"/user-script/{sc['id']}")
+
+    code, data = await asyncio.to_thread(http, "POST", "/user-scripts/import",
+                                         {"data": {"kind": "something-else"}})
+    results.append(("user_scripts.import_rejects_foreign_file", code == 400))
+
+    code, caps_bundle = await asyncio.to_thread(http, "GET", "/capabilities/export")
+    results.append(("capabilities.export_bundle",
+                    code == 200 and caps_bundle.get("kind") == "web-bridge/capabilities"
+                    and all(c.get("source") for c in caps_bundle.get("capabilities", []))))
+
     # a script has to be able to leave this machine: export it as a bookmarklet
     code, data = await asyncio.to_thread(http, "GET", f"/user-script/{uid}/bookmarklet")
     url = data.get("url", "")

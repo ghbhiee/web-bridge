@@ -278,6 +278,49 @@ def set_autorun(cap_id: str, on: bool) -> dict:
     return public(get(cap_id) or meta)
 
 
+BUNDLE_KIND = "web-bridge/capabilities"
+
+
+def export_bundle(ids: Optional[list[str]] = None) -> dict:
+    """Capability sources, ready to be restored elsewhere.
+
+    Exports the file text as written — header plus body — because that IS the
+    capability; anything reconstructed from parsed metadata would lose comments
+    and formatting.
+    """
+    out = []
+    for meta in all_caps():
+        if ids and meta["id"] not in ids:
+            continue
+        try:
+            out.append({"id": meta["id"],
+                        "source": Path(meta["file"]).read_text(encoding="utf-8")})
+        except OSError:
+            continue
+    return {"kind": BUNDLE_KIND, "version": 1,
+            "exported": time.strftime("%Y-%m-%dT%H:%M:%S"), "capabilities": out}
+
+
+def import_bundle(data: dict, overwrite: bool = False) -> dict:
+    if not isinstance(data, dict) or data.get("kind") != BUNDLE_KIND:
+        raise ValueError("这不是 web-bridge 的能力导出文件")
+    added, replaced, skipped = [], [], []
+    for item in data.get("capabilities") or []:
+        cap_id, source = item.get("id"), item.get("source")
+        if not cap_id or not source:
+            continue
+        exists = get(cap_id) is not None
+        if exists and not overwrite:
+            skipped.append(cap_id)
+            continue
+        try:
+            save(cap_id, source, overwrite=True)
+            (replaced if exists else added).append(cap_id)
+        except ValueError as e:
+            skipped.append(f"{cap_id}（{e}）")
+    return {"added": added, "replaced": replaced, "skipped": skipped}
+
+
 def delete(cap_id: str) -> bool:
     meta = get(cap_id)
     if not meta:

@@ -62,8 +62,13 @@ select.mini { max-width: 130px; }
 .msg.agent { background: var(--card); border: 1px solid var(--line); }
 .msg.err { background: var(--card); border: 1px solid var(--bad); color: var(--bad); }
 .msg .who { font-size: 10px; color: var(--muted); display: block; margin-bottom: 3px; }
-.tool { font-family: ui-monospace, monospace; font-size: 10.5px; color: var(--muted); background: var(--chip); border-radius: 5px; padding: 3px 6px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.msg pre { background: var(--chip); border-radius: 6px; padding: 7px; overflow: auto; font-size: 11px; margin: 6px 0 0; }
+.tool { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--muted);
+        background: var(--chip); border-radius: 5px; padding: 4px 7px; margin-top: 4px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.tool:hover { color: var(--fg); }
+.tool.open { white-space: pre-wrap; word-break: break-word; text-overflow: clip;
+             max-height: 16em; overflow: auto; color: var(--fg); }
+.msg pre { background: var(--chip); border-radius: 6px; padding: 8px; overflow: auto; font-size: 12.5px; margin: 6px 0 0; }
 .msg .save-code { margin-top: 6px; display: flex; gap: 6px; }
 .spin { color: var(--muted); font-size: 11.5px; }
 
@@ -130,9 +135,9 @@ select.mini { max-width: 130px; }
 .msg .body { white-space: normal; }
 .msg .body p { margin: 0 0 6px; white-space: pre-wrap; }
 .msg .body p:last-child { margin-bottom: 0; }
-.msg .body code { background: var(--chip); border-radius: 4px; padding: 1px 4px; font-family: ui-monospace, monospace; font-size: 11px; }
+.msg .body code { background: var(--chip); border-radius: 4px; padding: 1px 4px; font-family: ui-monospace, monospace; font-size: 12px; }
 .msg .body pre { background: var(--chip); border-radius: 6px; padding: 7px 8px; overflow-x: auto; margin: 6px 0; }
-.msg .body pre code { background: none; padding: 0; font-size: 10.5px; line-height: 1.5; }
+.msg .body pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.6; }
 .msg .body h1, .msg .body h2, .msg .body h3 { font-size: 12.5px; margin: 8px 0 4px; }
 .msg .body ul { margin: 4px 0; padding-left: 18px; }
 .msg .body li { margin: 2px 0; }
@@ -144,8 +149,14 @@ select.mini { max-width: 130px; }
 .empty { color: var(--muted); text-align: center; padding: 20px 8px; font-size: 12px; }
 
 .result { border: 1px solid var(--line); border-radius: 8px; margin-top: 9px; overflow: hidden; flex: none; }
-.result-head { display: flex; align-items: center; gap: 6px; padding: 6px 9px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 12px; }
-.json { margin: 0; padding: 8px 9px; max-height: 260px; overflow: auto; font-family: ui-monospace, monospace; font-size: 10.5px; white-space: pre-wrap; word-break: break-word; }
+.result-head { display: flex; align-items: center; gap: 6px; padding: 6px 9px; background: var(--card);
+               border-bottom: 1px solid var(--line); font-size: 12px; }
+.result-head strong { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; }
+.result-head .right { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; }
+.result-foot { padding: 5px 9px; font-size: 10.5px; color: var(--muted);
+               border-top: 1px solid var(--line); background: var(--card); }
+.json { margin: 0; padding: 8px 9px; max-height: 260px; overflow: auto; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 
 /* ---------- page ---------- */
 .card { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--card); }

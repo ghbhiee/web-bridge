@@ -277,6 +277,13 @@ payload 验证过：变成可见文本，不执行。
 工具在跑、还是脚本在页面上执行，只能干等。现在按事件切换阶段文案 + 秒表，
 结束后**保留**「✅ 完成 · 用时 12s · $0.21」——「它还在跑吗」这个问题要有答案。
 
+**导入/导出**：两个库都能整体或单条导出成 JSON（`/user-scripts/export`、`/capabilities/export`），
+再在别的机器导入。**导入默认不覆盖**：id 已存在的会另存为「…（导入）」而不是替换——
+导入不该悄悄吃掉已有的东西，让用户自己比对再删。
+
+**工具条可点开**：一行摘要是用来扫的，出问题时要看的是完整调用；截断成一行等于把它藏了。
+点一下展开成多行完整 JSON，再点收起。
+
 **代码块默认折叠**（超过 12 行），带「展开全部 (N 行)」和「复制全部」。页面脚本动辄几百行，
 全展开会把回答和保存按钮顶出屏幕。
 
@@ -387,7 +394,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 62 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 66 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

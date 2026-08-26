@@ -257,8 +257,14 @@ function agentBubble() {
 // A saved script needs a name and the user pressed one button, so derive one:
 // the code's own first comment if it has one, else the request that produced it.
 function scriptName(code, bubble) {
-  const comment = /^\s*\/\/\s*(.+)$/m.exec(code || "");
-  if (comment && comment[1].trim().length > 1) return comment[1].trim().slice(0, 40);
+  // The agent opens its code with `// 说明：<一整句>`. That sentence is the
+  // description, NOT the name — using it whole produced list entries and result
+  // headers that were a paragraph long and wrapped the buttons off the row.
+  const comment = /^\s*\/\/\s*(?:说明[：:]\s*)?(.+)$/m.exec(code || "");
+  if (comment && comment[1].trim().length > 1) {
+    const first = comment[1].trim().split(/[，,。；;（(]/)[0].trim();
+    return (first || comment[1].trim()).slice(0, 18);
+  }
   const asked = [...$("messages").querySelectorAll(".msg.user")].pop();
   const t = (asked?.textContent || "").trim().replace(/\s+/g, " ");
   return (t ? t.slice(0, 30) : "对话里写的脚本") + "（" + hostOf(state.tab?.url) + "）";
@@ -373,7 +379,14 @@ async function consumeStream(resp, bubble, spinArg) {
         const t = document.createElement("div");
         t.className = "tool";
         t.textContent = "⚙ " + describeTool(ev.name, ev.input);
-        t.title = `${ev.name} ${JSON.stringify(ev.input || {})}`;   // full call on hover
+        // The one-line summary is for scanning; the actual call is what you need
+        // when something looks wrong, and a truncated line hid it completely.
+        t.dataset.full = `${ev.name}\n${JSON.stringify(ev.input || {}, null, 2)}`;
+        t.title = "点击展开完整调用";
+        t.addEventListener("click", () => {
+          const open = t.classList.toggle("open");
+          t.textContent = open ? t.dataset.full : "⚙ " + describeTool(ev.name, ev.input);
+        });
         // name the layer that is busy: a page script running is not the same as
         // the agent thinking, and the wait feels very different
         setPhase(spin, /web_exec|run_capability/.test(ev.name || "")
@@ -754,6 +767,7 @@ function renderUserScripts() {
         <button class="mini primary run">运行</button>
         <button class="mini ghost edit">编辑</button>
         <button class="mini ghost mark" title="导出成书签，可拖到其它电脑的书签栏">书签</button>
+        <button class="mini ghost one" title="单独导出这个脚本为 JSON">导出</button>
         <label class="switch"><input type="checkbox" class="auto" ${u.autorun ? "checked" : ""}>自动运行</label>
       </div>
     </div>`).join("");
@@ -763,6 +777,13 @@ function renderUserScripts() {
     item.querySelector(".run").addEventListener("click", () => runUserScript(item, u));
     item.querySelector(".edit").addEventListener("click", () => openUserForm(u));
     item.querySelector(".mark").addEventListener("click", () => exportBookmarklet(u));
+    item.querySelector(".one").addEventListener("click", async () => {
+      try {
+        await downloadJson(`/user-scripts/export?ids=${encodeURIComponent(u.id)}`,
+                           (u.name || "script").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 50) + ".json");
+        toast("已导出这个脚本", 2200);
+      } catch (e) { toast("导出失败：" + e.message, 2600); }
+    });
     item.querySelector(".auto").addEventListener("change", async (e) => {
       try {
         await api(`/user-script/${encodeURIComponent(u.id)}/autorun`, {
@@ -798,7 +819,11 @@ async function runUserScript(item, u) {
 
 function showUserResult(name, result) {
   const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-  $("ur-name").textContent = name;
+  // Say what the box is. It appeared unannounced with a script name as its only
+  // label, so it read as a stray panel rather than "here is what your script
+  // returned" — and a long name pushed its own buttons onto a second line.
+  $("ur-name").textContent = "运行结果 · " + (name || "脚本");
+  $("ur-name").title = name || "";
   $("ur-body").textContent = text ?? "(无返回值)";
   $("u-result").hidden = false;
   $("ur-download").href = URL.createObjectURL(new Blob([text ?? ""], { type: "application/json" }));
@@ -871,6 +896,79 @@ function currentScopeMatches() {
       ? $("u-match").value.split(",").map((x) => x.trim()).filter(Boolean) : ["*"];
   }
   return [host || "*"];
+}
+
+// Export/import move a library between machines — the same reason the
+// bookmarklet export exists, but for the whole set rather than one script.
+async function downloadJson(path, filename) {
+  const data = await api(path);
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+function pickJson(input, onLoad) {
+  input.value = "";                        // same file twice must still fire
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      onLoad(JSON.parse(await file.text()));
+    } catch (e) {
+      toast("这个文件不是合法 JSON", 2600);
+    }
+  };
+  input.click();
+}
+
+function importReport(r) {
+  const bits = [];
+  if (r.added?.length) bits.push(`新增 ${r.added.length}`);
+  if (r.replaced?.length) bits.push(`覆盖 ${r.replaced.length}`);
+  if (r.renamed?.length) bits.push(`重名另存 ${r.renamed.length}`);
+  if (r.skipped?.length) bits.push(`跳过 ${r.skipped.length}（已存在）`);
+  return bits.join(" · ") || "没有可导入的内容";
+}
+
+function wireTransfer() {
+  $("u-export").addEventListener("click", async () => {
+    try {
+      await downloadJson("/user-scripts/export", "web-bridge-页面脚本.json");
+      toast("已导出全部页面脚本", 2400);
+    } catch (e) { toast("导出失败：" + e.message, 2600); }
+  });
+  $("u-import").addEventListener("click", () => pickJson($("u-file"), async (data) => {
+    try {
+      const r = await api("/user-scripts/import", {
+        method: "POST", body: JSON.stringify({ data, overwrite: false }),
+      });
+      toast(importReport(r), 3400);
+      await chrome.runtime.sendMessage({ type: "WB_PANEL", action: "sync-autorun" });
+      loadUserScripts();
+    } catch (e) { toast("导入失败：" + e.message, 3000); }
+  }));
+
+  $("c-export").addEventListener("click", async () => {
+    try {
+      await downloadJson("/capabilities/export", "web-bridge-能力库.json");
+      toast("已导出全部能力", 2400);
+    } catch (e) { toast("导出失败：" + e.message, 2600); }
+  });
+  $("c-import").addEventListener("click", () => pickJson($("c-file"), async (data) => {
+    try {
+      const r = await api("/capabilities/import", {
+        method: "POST", body: JSON.stringify({ data, overwrite: false }),
+      });
+      toast(importReport(r), 3400);
+      loadScripts();
+    } catch (e) { toast("导入失败：" + e.message, 3000); }
+  }));
 }
 
 function wirePageTab() {
@@ -1005,6 +1103,7 @@ $("f-all").addEventListener("click", () => {
 $("s-search").addEventListener("input", renderScripts);
 
 wirePageTab();
+wireTransfer();
 
 (async () => {
   await restore();          // before loadAgents, which honours the remembered pick
