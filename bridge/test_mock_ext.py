@@ -438,6 +438,13 @@ async def main():
                     and not _j6.looks_trivial(
                         'document.querySelectorAll(".ad").forEach(e=>e.remove()); return {n:1}')))
 
+    # The index is derived data — rebuildable from capabilities/*.js — so it
+    # belongs in a cache directory, never next to the config.
+    import toolsearch as _ts0
+    cache = str(_ts0.cache_dir())
+    results.append(("toolsearch.index_lives_in_cache",
+                    (".cache" in cache or "Local" in cache) and "config" not in cache))
+
     # Retrieval by intent, not by which URL is open. Looking tools up through
     # `match` alone meant a tool for another site was invisible even when it did
     # exactly what was asked — the user's intent lost to where they were standing.

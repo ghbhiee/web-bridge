@@ -115,8 +115,35 @@ def lexical_score(cap: dict, query_terms: set[str]) -> float:
     return total
 
 
+def cache_dir() -> "pathlib.Path":
+    """Where derived, rebuildable data goes — never the config directory.
+
+    The tool index is generated from capabilities/*.js and can be thrown away at
+    any time, so it belongs in a cache: XDG_CACHE_HOME (or ~/.cache) on
+    macOS/Linux, LOCALAPPDATA on Windows, matching where the Windows port
+    already puts its log.
+    """
+    import pathlib as _pl
+    if os.name == "nt":
+        base = _pl.Path(os.environ.get("LOCALAPPDATA") or (_pl.Path.home() / "AppData/Local"))
+        return base / "web-bridge" / "cache"
+    base = os.environ.get("XDG_CACHE_HOME")
+    return (_pl.Path(base) if base else _pl.Path.home() / ".cache") / "web-bridge"
+
+
 def qmd_available() -> bool:
-    return bool(shutil.which("qmd")) and os.environ.get("WEB_BRIDGE_QMD") == "1"
+    """qmd is used when installed — it is on Windows too, so it is not mac-only.
+
+    Opt out with WEB_BRIDGE_QMD=0. Only the BM25 path (`qmd search`) runs here:
+    `vsearch`/`query` go through a local embedding model, which on this machine
+    hangs outright (node-llama-cpp fails to build its Metal shaders) and even
+    healthy costs seconds. Tool lookup sits in the hot path — briefing
+    construction, exec hints, every agent question — so it must stay in
+    milliseconds. Set WEB_BRIDGE_QMD_VECTOR=1 to try the vector path anyway.
+    """
+    if os.environ.get("WEB_BRIDGE_QMD") == "0":
+        return False
+    return bool(shutil.which("qmd"))
 
 
 def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
@@ -129,18 +156,25 @@ def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
     """
     try:
         index_dir = _qmd_index(caps)
-        out = subprocess.run(
-            ["qmd", "search", query, "--json", "--limit", "20"],
-            cwd=index_dir, capture_output=True, text=True, timeout=20)
+        cmd = ["qmd", "vsearch" if os.environ.get("WEB_BRIDGE_QMD_VECTOR") == "1" else "search",
+               query, "--json"]
+        # Hard timeout: a hanging search binary must never hold up a tool lookup.
+        out = subprocess.run(cmd, cwd=index_dir, capture_output=True, text=True, timeout=6)
         if out.returncode != 0 or not out.stdout.strip():
             return {}
         data = json.loads(out.stdout)
-        hits = data.get("results") or data.get("hits") or []
+        hits = data if isinstance(data, list) else (data.get("results") or data.get("hits") or [])
+        # Only hits that ARE capabilities count. qmd searches every registered
+        # collection, and one rooted at the repo was returning HANDOFF.md and
+        # ROADMAP.md — harmless in the merge, but they skewed the normalisation
+        # and drowned the real hits.
+        known = {c["id"] for c in caps}
         scores = {}
         for h in hits:
-            path = str(h.get("path") or h.get("file") or "")
+            path = str(h.get("file") or h.get("path") or "")
             cap_id = os.path.splitext(os.path.basename(path))[0]
-            scores[cap_id] = float(h.get("score") or 0)
+            if cap_id in known:
+                scores[cap_id] = max(scores.get(cap_id, 0.0), float(h.get("score") or 0) or 1.0)
         top = max(scores.values(), default=0) or 1.0
         return {k: v / top for k, v in scores.items()}
     except Exception:  # noqa: BLE001
@@ -148,10 +182,15 @@ def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
 
 
 def _qmd_index(caps: list[dict]) -> str:
-    """Materialise capability descriptions as markdown for qmd to index."""
-    base = journal.STATE_DIR / "toolindex"
+    """Materialise capability descriptions as markdown for qmd, in the cache dir.
+
+    Rebuilt from the capability files whenever one changes, and re-indexed only
+    then — `qmd update` on every query would put a subprocess in the hot path
+    for nothing.
+    """
+    base = cache_dir() / "web-bridge-tools"
     base.mkdir(parents=True, exist_ok=True)
-    seen = set()
+    seen, changed = set(), False
     for c in caps:
         seen.add(c["id"] + ".md")
         doc = base / (c["id"] + ".md")
@@ -160,9 +199,21 @@ def _qmd_index(caps: list[dict]) -> str:
                 f"参数: {', '.join((c.get('params') or {}).keys())}\n")
         if not doc.exists() or doc.read_text(encoding="utf-8") != body:
             doc.write_text(body, encoding="utf-8")
+            changed = True
     for stale in base.glob("*.md"):
         if stale.name not in seen:
             stale.unlink(missing_ok=True)
+            changed = True
+
+    stamp = base / ".indexed"
+    if changed or not stamp.exists():
+        registered = stamp.exists()
+        cmd = ["qmd", "update"] if registered else ["qmd", "collection", "add", "."]
+        try:
+            subprocess.run(cmd, cwd=str(base), capture_output=True, text=True, timeout=30)
+            stamp.write_text(time.strftime("%Y-%m-%dT%H:%M:%S"), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
     return str(base)
 
 
@@ -241,19 +292,34 @@ def search(query: str = "", url: str = "", limit: int = 5,
     terms = expand(tokens(query))
     semantic = qmd_scores(query, caps) if (query and qmd_available()) else {}
 
-    scored = []
+    # Track record must not manufacture a match. A tool with five successful runs
+    # was topping "看看这页有什么可以抓的" over inspect-page on a faint keyword
+    # overlap: quality is a tie-breaker between plausible candidates, not a way
+    # to win from nowhere. So relevance is measured first, and anything far below
+    # the best match is dropped before quality is applied.
+    relevances = {}
     for cap in caps:
         if not include_generic and cap.get("match") == ["*"]:
             continue
         lex = lexical_score(cap, terms)
-        sem = semantic.get(cap["id"], 0.0) * 4.0     # comparable to lexical range
-        relevance = max(lex, sem) + 0.25 * min(lex, sem)
+        sem = semantic.get(cap["id"], 0.0) * 4.0
+        relevances[cap["id"]] = max(lex, sem) + 0.25 * min(lex, sem)
+    best_rel = max(relevances.values(), default=0.0)
+    floor = best_rel * 0.28
+
+    scored = []
+    for cap in caps:
+        if not include_generic and cap.get("match") == ["*"]:
+            continue
+        relevance = relevances.get(cap["id"], 0.0)
         # The URL is a hint about context, not a gate: a tool for this page is
         # more likely to be wanted, but a tool for another site is still the
         # right answer when the user asked for what it does.
         on_this_page = bool(url) and capabilities.matches(cap, url) and cap.get("match") != ["*"]
         if not query:
             relevance = 1.0 if on_this_page else 0.2
+        elif relevance < floor and not on_this_page:
+            continue                       # too weak a match for a track record to rescue
         q = quality(cap["id"], idx)
         fb = feedback.get(cap["id"], {})
         score = relevance * _quality_factor(q, fb) * _recency_factor(q["last"])

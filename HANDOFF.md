@@ -253,9 +253,29 @@ payload 验证过：变成可见文本，不执行。
 **上下文成本是硬约束**：只回 top-N（默认 5），每条一行摘要 + 参数名，不回代码、不回全表。
 简报里也只放排名前 4 的本页工具。
 
-**相关性后端可插拔**：默认内置词法打分（无依赖、Windows 能跑）；装了 qmd 且
-`WEB_BRIDGE_QMD=1` 时改用它的混合检索。**没有做成硬依赖**：qmd 是 homebrew 原生二进制，
-Windows 那边装不上，而这个语料只有十几条短描述，词法打分已经够用。
+**索引位置**：`~/.cache/web-bridge/web-bridge-tools/`（Windows 是
+`%LOCALAPPDATA%\web-bridge\cache\`）。是从 `capabilities/*.js` 派生、随时可删可重建的数据，
+所以放缓存目录，不放配置目录。目录名要唯一——叫 `toolindex` 时 `qmd collection add`
+撞上了一个已经存在的、根在**仓库目录**的同名 collection，静默失败，
+于是搜索结果里混进了 HANDOFF.md / ROADMAP.md。现在代码里也只认已知的能力 id 兜底。
+
+**qmd 集成：接好了，但实测在这个语料上贡献为零**（qmd 装了就用，`WEB_BRIDGE_QMD=0` 关掉）：
+- `qmd search`（BM25，0.13s）：开关它，10 条查询的排序**一模一样**
+- `qmd vsearch`（向量，才是真正能补语义的那条）：**本机跑不起来**——
+  `node-llama-cpp: ggml_metal_library_init_from_source: error compiling source`，
+  2 分钟不返回。工具检索在热路径上（建简报、exec 提示、每次 agent 提问），
+  所以向量路径默认不走，要试设 `WEB_BRIDGE_QMD_VECTOR=1`，且所有 qmd 调用都有 6 秒硬超时。
+
+**当前命中率（10 条基准查询）：6/10**。直白问法（表格 / table / 查电影在哪些国家能看 /
+视频文字版 / 抓列表翻页）基本都对；**口语化问法仍然不行**——
+「把网页数据弄成 excel 能用的样子」→ 命中 netflix，「这篇文章太乱了想安静地读」→ 命中
+extract-article 而不是 reader-mode。这是词法打分的天花板，靠加同义词是补不完的，
+**要真正解决得让 qmd 的向量索引跑起来**（先修 `qmd embed` / vsearch 的本机环境）。
+
+**一个已经修掉的排序 bug**：战绩分曾经能无中生有——`netflix-title-countries` 因为跑过 5 次成功，
+在「看看这页有什么可以抓的」这种几乎不相关的查询上也排第一。现在先算相关性、
+把远低于最高分的候选直接剔除（`floor = best * 0.28`），战绩只在**相关性接近的候选之间**做区分。
+（试过给相关性加 1.4 次幂让它更主导，实测 6/10 → 6/10，没有收益，就没留这个魔法数字。）
 
 **怎么让 Agent Tools 更容易命中**（实测有效的顺序）：
 0. **hint 必须放在所有调用方都看得到的地方**。简报只对**侧栏发起**的 run 生效，
