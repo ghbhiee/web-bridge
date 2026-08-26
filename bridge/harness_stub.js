@@ -22,6 +22,9 @@ async function api(path, opts = {}) {
   if (path === "/agents") return { default: "claude",
     runners: { claude: { label: "Claude Code", available: true, enabled: true },
                codex: { label: "Codex", available: true, enabled: true } } };
+  if (path.startsWith("/journal/stats")) return { ok: true, days: 7, capability_runs: 7,
+    adhoc_execs: 150, user_script_runs: 15, reuse_rate: 0.045,
+    tools: [{ id: "extract-article", runs: 4, ok: 4, avg_ms: 66 }], hosts: [] };
   if (path.startsWith("/journal")) return { matches: [
     { summary: "抓取列表标题", runs: 4, ok_runs: 3, last: "2026-08-25T01:00:00",
       code: "return [...document.querySelectorAll('h3')].map(e=>e.textContent)" }] };

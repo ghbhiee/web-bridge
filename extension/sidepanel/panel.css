@@ -91,6 +91,10 @@ select.mini { max-width: 130px; }
 .prompt-chip:hover { border-color: var(--accent); color: var(--accent); }
 .meta { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
 .uses { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.stats { background: var(--chip); border-radius: 8px; padding: 7px 10px; margin-bottom: 8px;
+         font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+.stats b { color: var(--fg); }
+.stats .warn-rate { color: var(--bad); }
 .search { width: 100%; border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
           background: var(--bg); margin-bottom: 8px; font-size: 12px; flex: none; }
 .search:focus { outline: 1px solid var(--accent); border-color: var(--accent); }

@@ -413,6 +413,14 @@ async def main():
     results.append(("capabilities.expose_updated_time",
                     bool(caps) and all(c.get("updated") for c in caps)))
 
+    # "did it use the tools I saved, or write JS again?" had no answer short of
+    # reading the JSONL by hand — the reuse rate is that answer.
+    code, data = await asyncio.to_thread(http, "GET", "/journal/stats?days=7")
+    results.append(("journal.reports_reuse_rate",
+                    code == 200 and "reuse_rate" in data
+                    and isinstance(data.get("tools"), list)
+                    and data["capability_runs"] + data["adhoc_execs"] >= 0))
+
     # both libraries must be reachable from a conversation. When only the page
     # library had a tool, "把上面这个创建到脚本库" put a capability meant for the
     # agent into the user's page scripts — the brief now routes by who it is for.

@@ -231,6 +231,10 @@ MCP 工具名：`web_capabilities`（带 `capability` 参数则返回单个能�
 几种行内格式**——从页面文本到活markup 没有通路。真机用 `<img onerror>` / `<script>`
 payload 验证过：变成可见文本，不执行。
 
+**复用率**：`wb stats`（面板 Agent Tools 标签顶部也有）——存下来的工具到底有没有被用上，
+还是每次都在现写 JS。这个数字是「能力库有没有价值」的唯一诚实答案；低于 20% 会标红。
+以前只能手翻 `exec-log.jsonl` 才知道，等于没人知道。
+
 **标签名就是它们的区别**：`Page Tools` = 给人用的，`Agent Tools` = 给 agent 用的。
 两个都叫「脚本库」的时候，用户说「存到脚本库」根本没法区分——真实踩过：用户要把一个
 能力存给 agent 复用，agent 只有 `web_save_page_script` 一个出口，存进了用户的页面脚本。
@@ -418,7 +422,7 @@ bridge 由 launchd 托管：`~/Library/LaunchAgents/com.web-bridge.server.plist`
 ## 测试与验证
 
 ```bash
-./bridge/run_tests.sh                  # 67 项，独立端口 + 临时 state，不碰实时服务
+./bridge/run_tests.sh                  # 68 项，独立端口 + 临时 state，不碰实时服务
 python3 bridge/panel_harness.py        # 生成 .harness/harness.html
 ```
 

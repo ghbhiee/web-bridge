@@ -300,6 +300,68 @@ def search(query: str = "", host: str = "", limit: int = 10,
     return rows[:limit]
 
 
+def usage_stats(days: int = 7, host: str = "") -> dict:
+    """Are the saved tools actually being used, or is everything hand-written?
+
+    The library only pays off if it gets called. Until now the only way to know
+    was to read the JSONL by hand — so the question "did it use my Agent Tool?"
+    had no answer a user could get on their own.
+    """
+    import datetime
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+    rows = []
+    try:
+        with LOG_PATH.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                if r.get("t", "") < cutoff:
+                    continue
+                if host and host.lower() not in (r.get("host") or "").lower():
+                    continue
+                rows.append(r)
+    except OSError:
+        pass
+
+    by_kind: dict[str, int] = {}
+    tools: dict[str, dict] = {}
+    hosts: dict[str, dict] = {}
+    for r in rows:
+        kind = r.get("kind") or "exec"
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+        h = hosts.setdefault(r.get("host") or "?", {"capability": 0, "exec": 0, "user-script": 0})
+        h[kind] = h.get(kind, 0) + 1
+        if kind == "capability" and r.get("capability"):
+            t = tools.setdefault(r["capability"], {"runs": 0, "ok": 0, "ms": 0})
+            t["runs"] += 1
+            t["ok"] += 1 if r.get("ok") else 0
+            t["ms"] += int(r.get("ms") or 0)
+
+    cap = by_kind.get("capability", 0)
+    adhoc = by_kind.get("exec", 0)
+    total = cap + adhoc
+    return {
+        "days": days,
+        "capability_runs": cap,
+        "adhoc_execs": adhoc,
+        "user_script_runs": by_kind.get("user-script", 0),
+        # the number that answers "is the library earning its keep"
+        "reuse_rate": round(cap / total, 3) if total else 0.0,
+        "tools": sorted(
+            ({"id": k, **v, "avg_ms": round(v["ms"] / v["runs"]) if v["runs"] else 0}
+             for k, v in tools.items()),
+            key=lambda t: t["runs"], reverse=True),
+        "hosts": sorted(
+            ({"host": k, **v} for k, v in hosts.items()),
+            key=lambda h: h["capability"] + h["exec"] + h["user-script"], reverse=True)[:10],
+    }
+
+
 def stats() -> dict:
     idx = _load_index()
     return {

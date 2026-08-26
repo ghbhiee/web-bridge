@@ -661,11 +661,32 @@ async function loadScripts() {
       }
     } catch { state.usage = {}; }
     renderScripts();
+    loadToolStats();
   } catch (e) {
     $("script-list").innerHTML = "";
     $("script-empty").hidden = false;
     $("script-empty").textContent = "读不到能力库：" + e.message;
   }
+}
+
+// "did it actually use my tools?" had no answer short of reading a JSONL by
+// hand. This is that answer, in the tab where the tools live.
+async function loadToolStats() {
+  const box = $("tool-stats");
+  try {
+    const d = await api("/journal/stats?days=7");
+    const total = d.capability_runs + d.adhoc_execs;
+    if (!total) { box.hidden = true; return; }
+    const pct = Math.round(d.reuse_rate * 100);
+    const top = (d.tools || []).slice(0, 3)
+      .map((t) => `${esc(t.id)} ×${t.runs}`).join("、");
+    box.innerHTML =
+      `最近 7 天：Agent Tools 被调用 <b>${d.capability_runs}</b> 次，` +
+      `临时现写 JS <b>${d.adhoc_execs}</b> 次` +
+      `（复用率 <b class="${pct < 20 ? "warn-rate" : ""}">${pct}%</b>）` +
+      (top ? `<br>用得最多：${top}` : "<br>这段时间没有工具被调用过——存下来的东西没派上用场。");
+    box.hidden = false;
+  } catch { box.hidden = true; }
 }
 
 function visibleCaps() {

@@ -941,6 +941,12 @@ async def agent_stop(run_id: str):
     return {"ok": agents.stop(run_id)}
 
 
+@app.get("/journal/stats", dependencies=[Depends(require_token)])
+async def journal_stats(days: int = 7, host: str = ""):
+    """Is the tool library actually being used, or is everything hand-written?"""
+    return {"ok": True, **journal.usage_stats(days, host)}
+
+
 @app.get("/journal", dependencies=[Depends(require_token)])
 async def journal_search(q: str = "", host: str = "", limit: int = 10, all: bool = False):
     """What has already been run here. The point of the journal is that the next

@@ -219,6 +219,38 @@ def cmd_open(args):
     return 0 if code == 200 else 1
 
 
+def cmd_stats(args):
+    """Answers 'are my saved tools being used, or is it rewriting JS every time'."""
+    if not _need_server(args):
+        return 2
+    qs = f"?days={args.days}" + (f"&host={urllib.parse.quote(args.host)}" if args.host else "")
+    code, d = _http("GET", "/journal/stats" + qs)
+    if code != 200:
+        _emit(d, args.json); return 1
+    if args.json:
+        print(json.dumps(d, ensure_ascii=False, indent=2)); return 0
+    total = d["capability_runs"] + d["adhoc_execs"]
+    print(f"最近 {d['days']} 天" + (f"（{args.host}）" if args.host else ""))
+    print(f"  Agent Tools 调用   {d['capability_runs']:>5}")
+    print(f"  临时现写 JS        {d['adhoc_execs']:>5}")
+    print(f"  Page Tools 运行    {d['user_script_runs']:>5}")
+    if total:
+        print(f"  复用率             {d['reuse_rate']*100:>4.0f}%   "
+              f"（现写占 {100 - d['reuse_rate']*100:.0f}%——比例越低说明存下来的工具越没被用上）")
+    if d["tools"]:
+        print("\n  用过的 Agent Tools：")
+        for t in d["tools"]:
+            print(f"    {t['id']:<34} {t['runs']} 次 · 平均 {t['avg_ms']}ms"
+                  + ("" if t["ok"] == t["runs"] else f" · 失败 {t['runs']-t['ok']} 次"))
+    else:
+        print("\n  这段时间没有任何 Agent Tool 被调用过。")
+    if d["hosts"]:
+        print("\n  按站点（能力 / 现写 / 页面脚本）：")
+        for h in d["hosts"][:6]:
+            print(f"    {h['host']:<28} {h['capability']:>3} / {h['exec']:>3} / {h['user-script']:>3}")
+    return 0
+
+
 def cmd_log(args):
     """Show what has already been run — the 'look before you write JS' command."""
     if not _need_server(args):
@@ -628,6 +660,11 @@ def build_parser():
 
     cl = sub.add_parser("close", help="关闭标签页（按 URL 片段或 tab id）")
     cl.add_argument("target", help="URL 片段或 tab id"); cl.set_defaults(func=cmd_close)
+    st2 = sub.add_parser("stats", help="工具复用率：存下来的能力到底有没有被用上")
+    st2.add_argument("--days", type=int, default=7)
+    st2.add_argument("--host", default="", help="只看某个站点")
+    st2.set_defaults(func=cmd_stats)
+
     lg2 = sub.add_parser("log", help="查以前在这个站跑过什么（写新脚本前先看这里）")
     lg2.add_argument("grep", nargs="?", default="", help="关键词（匹配说明和代码）")
     lg2.add_argument("--host", default="", help="只看某个站点")
