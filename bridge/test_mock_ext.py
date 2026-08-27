@@ -474,7 +474,9 @@ async def main():
     _real_run = _ts0.subprocess.run
     _ts0.subprocess.run = _fake_run
     _real_index = _ts0._qmd_index
+    _real_avail0 = _ts0.qmd_available
     _ts0._qmd_index = lambda caps: "/tmp"
+    _ts0.qmd_available = lambda: True
     _prev_env = os.environ.get("WEB_BRIDGE_QMD_VECTOR")
     _prev_q = os.environ.get("WEB_BRIDGE_QMD_QUIET")
     os.environ["WEB_BRIDGE_QMD_VECTOR"] = "1"
@@ -493,6 +495,7 @@ async def main():
     finally:
         _ts0.subprocess.run = _real_run
         _ts0._qmd_index = _real_index
+        _ts0.qmd_available = _real_avail0
         if _prev_env is None:
             os.environ.pop("WEB_BRIDGE_QMD_VECTOR", None)
         else:
@@ -509,7 +512,9 @@ async def main():
     def _boom(*a, **k):
         raise TimeoutError("simulated")
     _real_run2 = _ts0.subprocess.run
+    _real_avail = _ts0.qmd_available
     _ts0.subprocess.run = _boom
+    _ts0.qmd_available = lambda: True     # the point is the failure path, not the install
     _ts0.QMD_TROUBLE.clear()
     _prev_quiet = os.environ.get("WEB_BRIDGE_QMD_QUIET")
     os.environ["WEB_BRIDGE_QMD_QUIET"] = "1"
@@ -518,6 +523,7 @@ async def main():
         _announced = bool(_ts0.QMD_TROUBLE.get("reason"))
     finally:
         _ts0.subprocess.run = _real_run2
+        _ts0.qmd_available = _real_avail
         if _prev_quiet is None:
             os.environ.pop("WEB_BRIDGE_QMD_QUIET", None)
         else:

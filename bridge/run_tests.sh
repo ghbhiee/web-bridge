@@ -16,6 +16,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Never shell out to the real qmd from the suite. The ranking tests only need
+# deterministic lexical scoring, while a live qmd makes the run depend on a
+# native binary, a warm model cache and the network: one mutation run here spent
+# 30s per query timing out and pulled a 1.2GB model in the background. The two
+# tests that care about the qmd command itself mock subprocess.run and force
+# qmd_available(), so they still assert the real command shape.
+export WEB_BRIDGE_QMD=0
 export WEB_BRIDGE_PORT="$PORT" WEB_BRIDGE_STATE="$STATE"
 python3 "$HERE/server.py" >"$STATE/server.log" 2>&1 &
 SERVER_PID=$!
