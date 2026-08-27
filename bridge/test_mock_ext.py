@@ -9,6 +9,8 @@ assert the round-trips work.
 """
 import asyncio
 import json
+import time
+import re
 import urllib.parse
 import urllib.request
 import uuid
@@ -471,6 +473,56 @@ async def main():
                     and parts[-1] == _ts0.VECTOR_INDEX_NAME
                     and _ts0.VECTOR_INDEX_NAME.startswith("web-bridge")
                     and (".cache" in str(vec) or "Local" in str(vec))))
+
+    # Reuse cannot depend on the agent remembering to look. On 2026-08-27 a
+    # session wrote ten scripts rediscovering how to send mail while a working
+    # recipe sat in the journal an hour old — it called neither discover nor the
+    # journal. So the first exec of a session on a host carries prior work back
+    # with it, and the labels have to be the raw source: summarise() falls back
+    # to normalise()d code, where string literals are md5 hashes.
+    import server as _srv0
+    # The suite runs against a throwaway state dir, so the journal starts empty:
+    # make the prior work this asserts on, rather than leaning on the developer's
+    # own log — which is how this test passed locally and failed in the suite.
+    _j6.record(kind="exec", url="https://prior.example.com/x", ok=True,
+               code='const items = document.querySelectorAll("div.email-item");\n'
+                    'return Array.from(items).map(e => e.innerText);')
+    _saved_gap = _j6.SESSION_GAP_S
+    _j6.SESSION_GAP_S = 0   # the record above is this second old; 1 would not clear it
+    try:
+        _hint = _srv0._prior_work_hint("https://prior.example.com/x")
+        _pushed = bool(_hint and _hint.get("scripts"))
+        _readable = _pushed and not any(
+            re.search(r"\((?:[0-9a-f]{8})\)", x.get("summary") or "")
+            for x in _hint["scripts"])
+        # …and it must stay quiet mid-session, or every exec repeats it
+        _j6.SESSION_GAP_S = 10 ** 9
+        _quiet_mid = _srv0._prior_work_hint("https://prior.example.com/x") is None
+    finally:
+        _j6.SESSION_GAP_S = _saved_gap
+    results.append(("journal.prior_work_pushed_once_per_session",
+                    _pushed and _readable and _quiet_mid))
+
+    # …and the wiring, separately: the check above exercises the builder, and
+    # passed unchanged when the call was deleted from /exec. What the caller
+    # actually receives is the thing that matters.
+    _j6.record(kind="exec", url="https://wired.example.com/p", ok=True,
+               code='const rows = document.querySelectorAll("tr");\nreturn rows.length;')
+    # The server is a separate process, so setting SESSION_GAP_S here would not
+    # reach it. Backdate the record instead: that exercises the real production
+    # gap rather than a value only the test believes in.
+    _idx_path = _j6.STATE_DIR / "exec-index.json"
+    _idx = json.loads(_idx_path.read_text(encoding="utf-8"))
+    _old_t = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 7200))
+    for _k, _v in _idx.items():
+        if _k.startswith("wired.example.com|"):
+            _v["last"] = _old_t
+    _idx_path.write_text(json.dumps(_idx, ensure_ascii=False), encoding="utf-8")
+    _code_w, _data_w = await asyncio.to_thread(
+        http, "POST", "/exec",
+        {"code": "return 1", "url": "https://wired.example.com/p"})
+    results.append(("exec.result_carries_prior_work",
+                    _code_w == 200 and bool((_data_w or {}).get("prior_work", {}).get("scripts"))))
 
     # The panel draws itself by calling the same endpoints an agent uses. Until
     # `ui=1`, doing so was journalled as agent activity: journal_reads and

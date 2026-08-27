@@ -119,6 +119,7 @@ document.querySelectorAll(".tab").forEach((btn) => {
     document.querySelectorAll(".pane").forEach((p) =>
       p.classList.toggle("active", p.id === "pane-" + btn.dataset.tab));
     if (btn.dataset.tab === "scripts") loadScripts();
+    feedAutoRefresh(btn.dataset.tab === "scripts");
     if (btn.dataset.tab === "page") loadUserScripts();
   });
 });
@@ -1190,6 +1191,22 @@ async function loadAgents() {
 }
 
 $("feed-refresh")?.addEventListener("click", loadFeed);
+
+// The feed is for watching, so it has to move on its own — a log you must
+// remember to refresh is a log you stop believing. Only while the Agent Tools
+// tab is actually on screen: a hidden panel polling every few seconds is pure
+// waste, and the browser throttles it anyway.
+let feedTimer = null;
+function feedAutoRefresh(on) {
+  clearInterval(feedTimer);
+  feedTimer = on ? setInterval(() => {
+    if (document.visibilityState === "visible") loadFeed();
+  }, 5000) : null;
+}
+document.addEventListener("visibilitychange", () => {
+  const active = document.querySelector(".tab.active")?.dataset.tab === "scripts";
+  feedAutoRefresh(active && document.visibilityState === "visible");
+});
 
 $("refresh").addEventListener("click", async () => {
   await refreshHeader();

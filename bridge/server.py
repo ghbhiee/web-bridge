@@ -466,6 +466,54 @@ async def list_results(limit: int = 20):
     return {"ok": True, "results": results.recent(limit)}
 
 
+def _prior_work_hint(url: str) -> Optional[dict]:
+    """On the first exec of a session, say what has already worked on this host.
+
+    `_tools_for_host_hint` only lists capabilities, and capabilities cover a
+    fraction of what has been done: sending mail is deliberately never
+    auto-promoted, so on 2026-08-27 a session wrote ten scripts rediscovering
+    `openCompose` / `sendEmail` while a working recipe for exactly that sat in
+    the journal an hour old. It never called discover or the journal — the whole
+    reuse path depends on the agent remembering to look, and that session did
+    not.
+
+    So push instead of waiting to be asked, and only once: repeating this on
+    every exec would be noise, and the moment that matters is the first script
+    of a session, before the exploring starts.
+    """
+    host = journal.host_of(url)
+    if not host or host in ("?", "file:"):
+        return None
+    try:
+        if not journal.first_exec_of_session(host):
+            return None
+        prior = journal.search(host=host, limit=5)
+    except Exception:  # noqa: BLE001
+        return None
+    prior = [r for r in prior if r.get("summary") and not r.get("capability")]
+    if not prior:
+        return None
+    def label(row: dict) -> str:
+        # summarise() falls back to normalise()d source, where string literals
+        # have become md5 hashes — `querySelectorAll(7a31c3c3)` tells the reader
+        # nothing. The raw first line is worse-formatted and far more useful.
+        summary = (row.get("summary") or "").strip()
+        if not any(h in summary for h in ("(", "=>")) or summary.startswith("//"):
+            return summary[:90]
+        for line in (row.get("code") or "").splitlines():
+            line = line.strip()
+            if line and not line.startswith(("//", "/*", "*")):
+                return line[:90]
+        return summary[:90]
+
+    return {
+        "note": f"这个站点以前跑通过下面这些（{host}）。先看一眼再决定要不要自己写："
+                "取代码 web_journal / `wb log --host " + host + " --code`。",
+        "scripts": [{"summary": label(r), "signature": r.get("signature"),
+                     "ok_runs": r.get("ok_runs")} for r in prior],
+    }
+
+
 def _tools_for_host_hint(url: str) -> Optional[dict]:
     """Tell an exec caller that this page already has purpose-built tools.
 
@@ -572,6 +620,11 @@ async def exec_js(req: ExecReq):
                        ms=int((time.monotonic() - started) * 1000))
         raise
     landed = data.get("tab_url") or req.url or ""
+    # Before journalling this run, not after: recording it sets `last` for this
+    # host to now, so first_exec_of_session() would always answer "no" and the
+    # hint would never fire. Caught only by asserting on the endpoint's payload
+    # — the builder tested in isolation looked fine either way.
+    prior = _prior_work_hint(landed)
     note = journal.record(kind="exec", code=req.code, args=req.args,
                           url=landed,
                           site=req.site or "", ok=True, result=data.get("result"),
@@ -580,6 +633,8 @@ async def exec_js(req: ExecReq):
     hint = _tools_for_host_hint(landed)
     if hint:
         payload["tools_available"] = hint
+    if prior:
+        payload["prior_work"] = prior
     return JSONResponse(payload)
 
 

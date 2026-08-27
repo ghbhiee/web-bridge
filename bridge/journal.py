@@ -277,6 +277,26 @@ def looks_trivial(code: str) -> bool:
 SESSION_GAP_S = int(config.CFG.get("session_gap_s", 1800))
 
 
+def first_exec_of_session(host: str) -> bool:
+    """Is this the first script of a new session on this host?
+
+    True when nothing has run here for SESSION_GAP_S. Used to push prior work at
+    a caller exactly once per session, rather than on every exec.
+    """
+    idx = _load_index()
+    last = ""
+    for key, slot in idx.items():
+        if key.startswith(host + "|"):
+            last = max(last, slot.get("last") or "")
+    if not last:
+        return False                      # nothing to offer on a first-ever visit
+    try:
+        seen = time.mktime(time.strptime(last[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return False
+    return (time.time() - seen) >= SESSION_GAP_S
+
+
 def promote_session_tail(host: str) -> Optional[str]:
     """Save the last thing that worked here, once the session that produced it
     is over.
