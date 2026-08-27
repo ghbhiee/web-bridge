@@ -613,9 +613,17 @@ async def main():
     # Below a size budget the whole library is handed over instead of being
     # filtered: the model matches "把网页数据弄成 excel" to extract-tables better
     # than a synonym table does, and cannot match what it was never shown.
+    # Complete means every *human-described* tool, not every file: machine-titled
+    # auto-promotions are excluded on purpose, because a line reading
+    # `🤖 await sendEmail();await new Promise(r=>...` is not something a model can
+    # judge, and one such entry was advertised as a zero-parameter tool that sent
+    # whatever was in the compose box. Truncation is still a bug, so the count is
+    # pinned to the described set rather than loosened to "some of them".
     cat = _ts0.catalogue("https://unogs.com/")
+    _described = [c for c in _ts0.capabilities.all_caps()
+                  if not (c.get("provisional") or c.get("auto"))]
     results.append(("toolsearch.catalogue_fits_and_is_complete",
-                    cat is not None and cat["count"] == len(_ts0.capabilities.all_caps())
+                    cat is not None and cat["count"] == len(_described)
                     and cat["chars"] < _ts0.CATALOGUE_BUDGET_CHARS
                     and any("★本页" in l for l in cat["lines"])))
 

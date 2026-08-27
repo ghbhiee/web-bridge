@@ -322,21 +322,59 @@ def promote_session_tail(host: str) -> Optional[str]:
     return promoted
 
 
+OUTWARD_CALL = re.compile(
+    # `remove` and `confirm` are deliberately absent: el.remove() strips a node
+    # from the local DOM and window.confirm() opens a dialog. Neither leaves the
+    # page, and including them rejected reader-mode, which removes ad nodes.
+    r"\b(send|submit|publish|post|buy|pay|transfer)\w*\s*\(|\bdelete[A-Z_]\w*\s*\(", re.I)
+OUTWARD_FETCH = re.compile(
+    r"method\s*:\s*['\"](POST|PUT|PATCH|DELETE)['\"]", re.I)
+
+
+def acts_outward(code: str) -> bool:
+    """Does running this send something, submit something, or destroy something?
+
+    Auto-promotion cannot write a description or name the parameters, and those
+    are exactly what an irreversible action needs before anything calls it by
+    name. On 2026-08-27 three send-an-email tasks promoted
+    `await sendEmail(); ...check the toast` — the invariant half of the flow,
+    which repeats precisely because it carries none of the specifics. It landed
+    in the catalogue as a zero-parameter tool whose title was a line of code and
+    whose effect was "send whatever is currently in the compose box".
+
+    The knowledge is not lost by refusing: the journal keeps it, and the journal
+    is where reuse actually happens — a session that reads it writes its own
+    code anyway.
+    """
+    # Scan the raw source, not normalise() output: normalise stashes string
+    # literals as hashes, so `method: "POST"` no longer contains the word POST.
+    return bool(OUTWARD_CALL.search(code) or OUTWARD_FETCH.search(code))
+
+
 def maybe_promote(slot: dict, provisional: bool = False) -> Optional[str]:
     """Write a script into the library. Deliberately automatic: relying on an
     agent to remember `save_capability` is exactly why the library never grew on
     its own.
 
-    `provisional` marks a session tail (see promote_session_tail): the same file
-    in the same place, but flagged so the catalogue can leave it out. A repeat
-    promotion has three successes behind it; a tail has a guess.
+    Everything written here is `provisional`, whether it repeated three times or
+    was a session tail. The line that matters for the catalogue is not how sure
+    we are that the script is useful -- it is whether a human ever described it.
+    The catalogue works because every entry is a sentence a model can judge at a
+    glance; an entry titled `🤖 await sendEmail();await new Promise(r=>...` is
+    not one, and on 2026-08-27 exactly that was advertised on the mail page as a
+    zero-parameter tool whose effect was "send whatever is in the compose box".
+
+    Provisional tools stay in search, where they were found first for a plain
+    natural-language query even without the page boost. Overwrite one with
+    web_save_capability -- a real title, description and parameters -- and it
+    stops being provisional and joins the catalogue.
     """
     if slot.get("promoted_to"):
         return None
     if not provisional and slot["ok_runs"] < PROMOTE_AFTER:
         return None
     code = slot.get("code") or ""
-    if not code.strip() or looks_trivial(code):
+    if not code.strip() or looks_trivial(code) or acts_outward(code):
         return None
     cap_id = auto_id(slot["host"], slot["sig"])
     if capabilities.get(cap_id):
@@ -351,7 +389,7 @@ def maybe_promote(slot: dict, provisional: bool = False) -> Optional[str]:
         "match": [slot["host"]] if slot["host"] and slot["host"] != "?" else ["*"],
         "params": _params_from_args(slot.get("args")),
         "auto": True,
-        "provisional": provisional,
+        "provisional": True,
         "runs": slot["ok_runs"],
         "first_seen": slot["first"],
     }

@@ -438,7 +438,15 @@ def catalogue(url: str = "") -> Optional[dict]:
     # whole library fits in a briefing. Letting guesses in would spend that
     # budget on noise and, past the limit, disable the catalogue outright.
     # search() still ranks them, which is where a wrong guess costs nothing.
-    caps = [c for c in capabilities.all_caps() if not c.get("provisional")]
+    # Machine-described tools are excluded, `auto` and `provisional` alike. The
+    # catalogue earns its keep because every line is a sentence a model can judge
+    # at a glance; a title that is a fragment of source code is not, and one such
+    # entry was advertising "send whatever is in the compose box" as a
+    # zero-parameter tool. They stay in search() -- ranked first there for a
+    # plain-language query even without the page boost -- and rejoin the
+    # catalogue as soon as web_save_capability gives them a real description.
+    caps = [c for c in capabilities.all_caps()
+            if not (c.get("provisional") or c.get("auto"))]
     if not caps:
         return None
     idx = journal._load_index()
