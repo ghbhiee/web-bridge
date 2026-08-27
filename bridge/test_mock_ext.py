@@ -461,6 +461,13 @@ async def main():
                     _ts0.catalogue("") is None and bool(_ts0.search("表格", limit=3))))
     _ts0.CATALOGUE_BUDGET_CHARS = saved_budget
 
+    # The hot path must never shell out: a briefing is built on every message,
+    # and a vector query costs seconds.
+    import time as _t9
+    _t0 = _t9.time()
+    _ts0.catalogue("https://example.com/")
+    results.append(("toolsearch.catalogue_is_hot_path_fast", (_t9.time() - _t0) < 0.5))
+
     # Retrieval by intent, not by which URL is open. Looking tools up through
     # `match` alone meant a tool for another site was invisible even when it did
     # exactly what was asked — the user's intent lost to where they were standing.

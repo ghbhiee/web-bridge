@@ -275,7 +275,16 @@ payload 验证过：变成可见文本，不执行。
 
 **qmd 集成：接好了，但实测在这个语料上贡献为零**（qmd 装了就用，`WEB_BRIDGE_QMD=0` 关掉）：
 - `qmd search`（BM25，0.13s）：开关它，10 条查询的排序**一模一样**
-- `qmd vsearch`（向量）：**这台机器上跑不起来，但不是本项目的问题**——
+- `qmd vsearch`（向量）：**能用了，靠 `QMD_FORCE_CPU=1`，不用重编译任何东西**。
+  GPU 路径要 node-llama-cpp 现场编译 Metal shader，而这台机器缺 Metal Toolchain
+  （`xcrun metal` 直接拒绝），编译失败后**无限等待而不是报错**。强制 CPU 推理绕开整个
+  shader 编译，同样的查询 ~5s 出结果（加 `--no-rerank` 省掉第二次模型加载）。
+  代码里 `_qmd_env()` 默认设了这个变量。
+  **副作用：llm-wiki 的向量检索也一起恢复了**（实测 ob 库 1.3s / 17 条命中）——
+  它之前卡的是同一个原因，`kb.py` 里也该加上 `QMD_FORCE_CPU=1`。
+  （另一条路是 `xcodebuild -downloadComponent MetalToolchain` 把工具链装回来，
+  但那要能连上苹果的资产服务器，而且不是必须的。）
+- 历史记录：这台机器上向量曾经完全不可用——
   `xcrun metal` 报 `missing Metal Toolchain`，node-llama-cpp 编译不出 shader，
   于是 `ggml_metal_library_init_from_source: error compiling source` 后无限等待。
   **llm-wiki 自己的 ob 库现在也一样卡**，同一个报错，所以这是机器层面的

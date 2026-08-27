@@ -156,11 +156,17 @@ def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
     """
     try:
         index_dir = _qmd_index(caps)
-        cmd = ["qmd", "vsearch" if os.environ.get("WEB_BRIDGE_QMD_VECTOR") == "1" else "search",
-               query, "--json"]
+        # Vector is on by default now that it runs (CPU mode). It costs ~5s, but
+        # only on an explicit query: the hot path (briefing, exec hints) uses the
+        # catalogue and never shells out to qmd at all.
+        vector = os.environ.get("WEB_BRIDGE_QMD_VECTOR", "1") != "0"
+        cmd = ["qmd", "vsearch" if vector else "search", query, "--json"]
+        if vector:
+            # reranking is a second model load for a fourteen-document corpus
+            cmd.append("--no-rerank")
         # Hard timeout: a hanging search binary must never hold up a tool lookup.
         env = _qmd_env(cache_dir() / "qmd")
-        timeout = 25 if os.environ.get("WEB_BRIDGE_QMD_VECTOR") == "1" else 6
+        timeout = 30 if vector else 6
         out = subprocess.run(cmd, cwd=index_dir, env=env,
                              capture_output=True, text=True, timeout=timeout)
         if out.returncode != 0 or not out.stdout.strip():
@@ -206,6 +212,13 @@ def _qmd_env(index_home: "pathlib.Path") -> dict:
     env = dict(os.environ)
     env["INDEX_PATH"] = str(index_home / "index.sqlite")
     env["QMD_CONFIG_DIR"] = str(index_home)
+    # Force CPU inference. The GPU path needs node-llama-cpp to compile Metal
+    # shaders, and this machine has no Metal Toolchain — `xcrun metal` refuses,
+    # the shader build fails, and the search then hangs forever instead of
+    # erroring. On CPU the same query answers in about five seconds, with no
+    # rebuild of anything. (Downloading the toolchain would also fix it; this
+    # does not require it.)
+    env.setdefault("QMD_FORCE_CPU", "1")
     return env
 
 
@@ -257,7 +270,7 @@ def _qmd_index(caps: list[dict]) -> str:
         try:
             subprocess.run(["qmd", "update"], cwd=str(base), env=env,
                            capture_output=True, text=True, timeout=60)
-            if os.environ.get("WEB_BRIDGE_QMD_VECTOR") == "1":
+            if os.environ.get("WEB_BRIDGE_QMD_VECTOR", "1") != "0":
                 # embeddings are only needed for the vector path, and generating
                 # them costs seconds — do it when that path is actually in use
                 subprocess.run(["qmd", "embed"], cwd=str(base), env=env,
@@ -387,13 +400,28 @@ def search(query: str = "", url: str = "", limit: int = 5,
     # overlap: quality is a tie-breaker between plausible candidates, not a way
     # to win from nowhere. So relevance is measured first, and anything far below
     # the best match is dropped before quality is applied.
-    relevances = {}
+    # Combine the two signals on the same scale. Raw lexical scores run far
+    # larger than qmd's 0..1, so adding them directly let keyword overlap drown
+    # the semantic result: qmd put reader-mode first for "这篇文章太乱了想安静地读"
+    # while the merged score still said extract-article, which shares more
+    # characters and means the wrong thing.
+    raw_lex = {}
     for cap in caps:
         if not include_generic and cap.get("match") == ["*"]:
             continue
-        lex = lexical_score(cap, terms)
-        sem = semantic.get(cap["id"], 0.0) * 4.0
-        relevances[cap["id"]] = max(lex, sem) + 0.25 * min(lex, sem)
+        raw_lex[cap["id"]] = lexical_score(cap, terms)
+    top_lex = max(raw_lex.values(), default=0.0) or 1.0
+
+    relevances = {}
+    for cap_id, lex in raw_lex.items():
+        lex_n = lex / top_lex
+        sem_n = semantic.get(cap_id, 0.0)          # already 0..1
+        if semantic:
+            # semantics lead where they exist; keywords keep exact ids and
+            # parameter names findable
+            relevances[cap_id] = 0.65 * sem_n + 0.35 * lex_n
+        else:
+            relevances[cap_id] = lex_n
     best_rel = max(relevances.values(), default=0.0)
     floor = best_rel * 0.28
 
