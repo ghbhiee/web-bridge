@@ -438,6 +438,19 @@ async def main():
                     and not _j6.looks_trivial(
                         'document.querySelectorAll(".ad").forEach(e=>e.remove()); return {n:1}')))
 
+    # …and it must not reject real work either. The list of "is this script
+    # doing anything" markers had textContent but not innerText, so a script
+    # that read the page with innerText and parsed it was judged trivial and
+    # could never be promoted, no matter how often it worked. Found on
+    # 2026-08-27: a dsh session extracted a country list from unogs three times
+    # by hand and nothing was ever learned from it.
+    _extract = ('const t=document.body.innerText; const i=t.indexOf("found in"); '
+                'const lines=t.slice(i).split("\n").map(s=>s.trim()).filter(Boolean); '
+                'return JSON.stringify({count:lines.length, lines})')
+    results.append(("journal.innertext_extraction_is_promotable",
+                    not _j6.looks_trivial(_extract)
+                    and _j6.looks_trivial("return document.title")))
+
     # The index is derived data — rebuildable from capabilities/*.js — so it
     # belongs in a cache directory, never next to the config.
     import toolsearch as _ts0

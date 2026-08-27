@@ -251,10 +251,19 @@ def looks_trivial(code: str) -> bool:
     # document.title or reloads is scaffolding no matter how often it repeats.
     doing_something = any(k in body for k in (
         "querySelector", "getElement", "fetch(", "XMLHttpRequest", "createElement",
-        "addEventListener", "innerHTML", "textContent", "style.", "classList",
-        "JSON.parse", "localStorage", "sessionStorage"))
+        "addEventListener", "innerHTML", "textContent", "innerText", "style.",
+        "classList", "JSON.parse", "localStorage", "sessionStorage",
+        "getAttribute", "dataset", "closest(", "document.forms", "document.links"))
     if not doing_something:
         return True
+    # No special handling for probes ("dump me the first 600 chars"), even though
+    # innerText above makes them look like real work to a keyword check: the
+    # PROMOTE_AFTER threshold already excludes them. A probe is written fresh
+    # each time with a different slice length and different diagnostics, so it
+    # does not repeat verbatim. Measured over the 161 scripts in the index: 4
+    # ever reached three runs, none of them a probe. A rule aimed at them was
+    # tried and reverted -- it judged 6 of the 14 real capabilities trivial,
+    # because real extractors legitimately truncate the fields they return.
     # Length is judged only AFTER that: a short script that really calls an API
     # is a fine capability, while a long one that reloads in a loop is not.
     if len(body) < 40:

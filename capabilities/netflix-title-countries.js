@@ -1,12 +1,12 @@
 /* @web-bridge-capability {
   "id": "netflix-title-countries",
   "title": "查电影/剧集在哪些国家的 Netflix 能看",
-  "description": "在 unogs.com（Netflix 全球目录）按片名搜索，返回该片当前在哪些国家的 Netflix 上架，含国家码、上架日期、下架日期、音轨与字幕语言、HD/UHD。也可直接传 netflixid 精确查询。需要浏览器有 unogs.com 页面（该站用 cookie 里的 authtoken 做 API 认证）。",
+  "description": "查一部电影/剧集在哪些国家的 Netflix 能看，返回国家码、上架/下架日期、音轨与字幕语言、HD/UHD。三种用法：①**已经在 unogs.com/title/<id> 详情页上就不用传参数**，自动读当前页面这部片；②传 query（片名）搜索；③传 netflixid 精确查询。需要浏览器有 unogs.com 页面（该站用 cookie 里的 authtoken 做 API 认证）。",
   "kind": "extract",
   "match": ["unogs.com"],
   "params": {
-    "query": {"type": "string", "description": "片名，英文原名命中率最高，例如 Inception / Breaking Bad"},
-    "netflixid": {"type": "string", "description": "可选。已知 Netflix ID 时直接用它查，忽略 query"},
+    "query": {"type": "string", "description": "可选。片名，英文原名命中率最高，例如 Inception / Breaking Bad。在 /title/<id> 详情页上可以不传"},
+    "netflixid": {"type": "string", "description": "可选。已知 Netflix ID 时直接用它查，忽略 query。在 /title/<id> 页面上会自动从 URL 读出来"},
     "type": {"type": "string", "description": "可选。movie 或 series，用来过滤搜索结果"},
     "detail": {"type": "number", "description": "可选，默认 1。对前 N 个匹配结果拉取国家列表"},
     "limit": {"type": "number", "description": "可选，默认 10。搜索候选数量上限"},
@@ -17,7 +17,16 @@
 // 说明：按片名在 unogs 上查一部电影/剧集在哪些国家的 Netflix 能看
 const A = typeof args === 'string' ? (args.trim().startsWith('{') ? JSON.parse(args) : { query: args }) : (args || {});
 const q = String(A.query || A.title || '').trim();
-if (!q && !A.netflixid) return { error: '需要 query（片名）或 netflixid' };
+// On a title page the id is already in the URL. Without this, asking "which
+// countries is this on?" while looking at the answer's own page had to go
+// through a name search -- a different enough shape that an agent reads the
+// page text by hand instead, which is exactly what happened on 2026-08-27.
+const fromUrl = (location.pathname.match(/\/title\/(\d+)/) || [])[1];
+// An explicit query wins over the page you happen to be on: asking for
+// Inception while sitting on the Dark Knight page must search, not answer
+// about the current page.
+const nfidArg = A.netflixid || (q ? '' : (fromUrl || ''));
+if (!q && !nfidArg) return { error: '需要 query（片名）或 netflixid，或在 unogs.com/title/<id> 页面上运行' };
 
 const tok = (document.cookie.match(/authtoken=([^;]+)/) || [])[1];
 if (!tok) return { error: '当前页面没有 unogs 的 authtoken cookie，请先打开 https://unogs.com/' };
@@ -45,8 +54,8 @@ const countriesOf = async (nfid) => {
 };
 
 let cands = [];
-if (A.netflixid) {
-  const d = await get('/api/title/detail?netflixid=' + A.netflixid);
+if (nfidArg) {
+  const d = await get('/api/title/detail?netflixid=' + nfidArg);
   cands = (Array.isArray(d) ? d : []).map(c => ({ ...c, nfid: c.netflixid }));
 } else {
   const p = new URLSearchParams({
