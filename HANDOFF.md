@@ -275,23 +275,31 @@ payload 验证过：变成可见文本，不执行。
 
 **qmd 集成：接好了，但实测在这个语料上贡献为零**（qmd 装了就用，`WEB_BRIDGE_QMD=0` 关掉）：
 - `qmd search`（BM25，0.13s）：开关它，10 条查询的排序**一模一样**
-- `qmd vsearch`（向量）：**查询必须写成 `vec: <内容>`，不能传裸句子**。
-  实测 0.9-1.2s（裸句子要 12.8s），代码默认关着这条路，要试设 `WEB_BRIDGE_QMD_VECTOR=1`。
-- **「向量搜索卡死」的真正原因（2026-08-26 定位）：qmd 在偷偷下 1.2GB 模型。**
-  qmd 的查询文法分两种：不带前缀的裸句子是 **expand query**，qmd 会先用一个
-  1.2GB 的查询扩写模型生成额外的 `vec:` / `hyde:` 变体（stderr 里能看到
-  `Searching 4 vector queries...` 和生成出来的变体行）；带 `vec:` / `lex:` / `hyde:`
-  前缀的是**结构化查询文档**，直接跳过扩写。
-  - 这个模型**不是可选的，也不能靠不写 `generate:` 躲掉**——实测把它从 `index.yml` 删掉，
-    qmd 回落到同一个默认模型，照样下载。
-  - 所以在没有这个模型的机器上，**第一次向量搜索会静默等下载 1.2GB，看起来就是卡死**。
-    实测：把模型文件挪走后跑 `vsearch`，>75s 无输出；挪回来后 2.7s 返回。
-  - 改用 `vec:` 前缀后：5 条查询 16.0s → 6.3s，**首位命中 5/5 完全一致**，质量没有代价。
-  - **改完之后 web-bridge 对「这个模型被删掉」免疫了**（实测：把模型文件挪走，向量路径
-    1.0s / 0.8s 正常返回、不触发下载；修复前同样条件挂 >75s）。
-  - 推论：`qmd vsearch` **根本不重排**（`--help` 写的是 "Vector similarity only"，
-    输出里也从来没有 `Reranking N chunks` 那行），所以给它传 `--no-rerank` 是空操作，已删。
-    我之前那句「5.7s 是 --no-rerank 的功劳」也站不住——真正的变量是有没有走扩写。
+- **向量检索必须用 `qmd query $'vec: …' --no-rerank`，不能用 `qmd vsearch`。**
+  实测 0.8-1.6s。代码默认关着这条路，要试设 `WEB_BRIDGE_QMD_VECTOR=1`。
+- **「向量搜索卡死」的真正原因：qmd 在偷偷下 1.2GB 扩写模型。**
+  qmd 的查询文法有两种：不带前缀的裸句子是 **expand query**，qmd 先用一个 1.2GB 的
+  查询扩写模型生成额外的 `vec:` / `hyde:` 变体；带 `vec:`/`lex:`/`hyde:` 前缀的是
+  **结构化查询文档**，跳过扩写。
+  - **但只有 `qmd query` 认这个语法。`qmd vsearch` 不解析类型前缀**——它把
+    `vec: 抓列表` 整串当成普通正文，照样调扩写模型（stderr 里能看到
+    `hyde: The topic of vec: 抓列表 covers …`）。我一度以为给 vsearch 加前缀就够了，
+    **是错的**：模型不在本地时，`vsearch` 无论加不加前缀都会卡到 30s 超时。
+  - 判据看 stderr：`Structured search: 1 queries (vec)` = 真的跳过了扩写；
+    出现 `Gathering information` 转圈或 `hyde:` 行 = 在扩写（并可能在下载模型）。
+  - 这个模型**不能靠不写 `generate:` 躲掉**，qmd 会回落到同一个默认模型。
+  - 删不删这个模型都行，**前提是所有查询出口都带结构化前缀**；只要还有一条裸句子的
+    出口，删了就会挨一次静默下载。判断方法：`ls ~/.cache/qmd/models/*.ipull`，
+    有这个临时文件就是正在下载。`qmd doctor` 也会把缺失模型补下载回来。
+  - 实测（模型不在本地）：`qmd vsearch` 任何形式 → 30s 超时；
+    `qmd query $'vec: …' --no-rerank` → 0.79s，14 条命中，首条正确，零下载。
+  - `--no-rerank` 对 `vsearch` 是空操作（它本来就只做向量相似度，从不重排），
+    但对 `qmd query` 是真的——`query` 默认会重排，那是第二次模型加载。
+- **向量路径失败不再是静默的。** 原先 `qmd_scores` 吞掉异常返回 `{}`，`search()` 就
+  退回纯词法排序——**「向量彻底不工作」和「排序略有不同」从外面看一模一样**，我就是
+  被这个骗了一轮（30s 超时 + 结果变差，却读成了"能用"）。现在会往 stderr 打一行并记在
+  `QMD_TROUBLE` 里，`WEB_BRIDGE_QMD_QUIET=1` 可关。降级本身保留——检索不该因为一个
+  辅助二进制挂了就失败。
 - GPU / CPU：用 GPU，**不要设 `QMD_FORCE_CPU`**。
   `ggml_metal_library_init_from_source: error compiling source` 是噪声不是故障——
   llama.cpp 先试着从源码编 Metal kernel（缺 Metal Toolchain → 打印这行），失败后回退到

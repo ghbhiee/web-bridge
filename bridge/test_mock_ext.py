@@ -476,11 +476,20 @@ async def main():
     _real_index = _ts0._qmd_index
     _ts0._qmd_index = lambda caps: "/tmp"
     _prev_env = os.environ.get("WEB_BRIDGE_QMD_VECTOR")
+    _prev_q = os.environ.get("WEB_BRIDGE_QMD_QUIET")
     os.environ["WEB_BRIDGE_QMD_VECTOR"] = "1"
+    os.environ["WEB_BRIDGE_QMD_QUIET"] = "1"
     try:
         _ts0.qmd_scores("把网页数据弄成 excel", _ts0.capabilities.all_caps())
         _cmd = _seen_cmd.get("cmd") or []
-        _structured = any(isinstance(a, str) and a.startswith("vec: ") for a in _cmd)
+        # Both halves matter. `vsearch` does NOT parse the vec:/lex:/hyde:
+        # grammar -- it treats the whole string as plain text and expands it
+        # anyway -- so the prefix alone proves nothing. Only `qmd query` reads
+        # it as a structured document. And `query` really does rerank, so
+        # --no-rerank is not the no-op it is on vsearch.
+        _structured = ("query" in _cmd and "vsearch" not in _cmd
+                       and any(isinstance(a, str) and a.startswith("vec: ") for a in _cmd)
+                       and "--no-rerank" in _cmd)
     finally:
         _ts0.subprocess.run = _real_run
         _ts0._qmd_index = _real_index
@@ -488,7 +497,33 @@ async def main():
             os.environ.pop("WEB_BRIDGE_QMD_VECTOR", None)
         else:
             os.environ["WEB_BRIDGE_QMD_VECTOR"] = _prev_env
+        if _prev_q is None:
+            os.environ.pop("WEB_BRIDGE_QMD_QUIET", None)
+        else:
+            os.environ["WEB_BRIDGE_QMD_QUIET"] = _prev_q
     results.append(("toolsearch.vector_query_skips_expansion", _structured))
+
+    # A dead vector path must not masquerade as a slightly different ranking.
+    # It did: a 30s timeout downgraded results to keyword-only and nothing said
+    # so, which is how a broken search got measured as a working one.
+    def _boom(*a, **k):
+        raise TimeoutError("simulated")
+    _real_run2 = _ts0.subprocess.run
+    _ts0.subprocess.run = _boom
+    _ts0.QMD_TROUBLE.clear()
+    _prev_quiet = os.environ.get("WEB_BRIDGE_QMD_QUIET")
+    os.environ["WEB_BRIDGE_QMD_QUIET"] = "1"
+    try:
+        _degraded = _ts0.search("抓一个列表并翻页", limit=2)
+        _announced = bool(_ts0.QMD_TROUBLE.get("reason"))
+    finally:
+        _ts0.subprocess.run = _real_run2
+        if _prev_quiet is None:
+            os.environ.pop("WEB_BRIDGE_QMD_QUIET", None)
+        else:
+            os.environ["WEB_BRIDGE_QMD_QUIET"] = _prev_quiet
+    results.append(("toolsearch.vector_failure_is_not_silent",
+                    _announced and bool(_degraded)))
 
     # index.yml is shared ground: kb.py adds an `ignore:` block and qmd itself
     # back-fills a `generate:` model line, so a writer that rewrites on any

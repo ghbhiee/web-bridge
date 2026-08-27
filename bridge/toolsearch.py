@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from typing import Optional
 
@@ -169,6 +170,18 @@ def qmd_available() -> bool:
     return bool(shutil.which("qmd"))
 
 
+QMD_TROUBLE: dict = {}
+
+
+def _note_qmd_trouble(reason: str) -> None:
+    """Record why the semantic path gave nothing, so it can be seen."""
+    QMD_TROUBLE["reason"] = reason
+    QMD_TROUBLE["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    if os.environ.get("WEB_BRIDGE_QMD_QUIET") != "1":
+        print(f"[web-bridge] vector search unavailable, using keywords only: {reason}",
+              file=sys.stderr)
+
+
 def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
     """Semantic ranking through the local qmd index, when it is enabled.
 
@@ -183,19 +196,21 @@ def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
         # hints) uses the catalogue and never shells out to qmd at all.
         vector = os.environ.get("WEB_BRIDGE_QMD_VECTOR", "1") != "0"
         if vector:
-            # `vec:` matters more than it looks. A bare sentence is an "expand
-            # query": qmd runs it through a 1.2GB query-expansion model to invent
-            # extra vec:/hyde: variants first. That model is not optional and not
-            # avoidable by leaving `generate:` out of index.yml — qmd falls back
-            # to the same default — so on a machine that does not have it yet,
-            # the first vector search silently downloads 1.2GB and looks hung.
-            # Prefixing the line makes it a structured query document, which
-            # skips expansion entirely: measured 16.0s -> 6.3s over five queries
-            # with identical results (5/5 same top hit).
-            term = "vec: " + " ".join(query.split())
+            # `qmd query` with a typed line, NOT `qmd vsearch`. Only `query`
+            # parses the vec:/lex:/hyde: grammar; `vsearch` treats any input as
+            # plain text and runs it through a 1.2GB query-expansion model to
+            # invent extra variants first. That model is not optional and cannot
+            # be dodged by leaving `generate:` out of index.yml — qmd falls back
+            # to the same default — so on a machine without it, a vector search
+            # silently downloads 1.2GB and looks hung. Verified with the model
+            # absent: `vsearch` (with or without the prefix) times out at 30s and
+            # this path answers in 0.8s, printing `Structured search: 1 queries
+            # (vec)`. Unlike vsearch, `query` does rerank, so --no-rerank is real
+            # here: it is the second model load this hot-ish path cannot afford.
+            cmd = ["qmd", "query", "vec: " + " ".join(query.split()),
+                   "--no-rerank", "--json"]
         else:
-            term = query
-        cmd = ["qmd", "vsearch" if vector else "search", term, "--json"]
+            cmd = ["qmd", "search", query, "--json"]
         # Hard timeout: a hanging search binary must never hold up a tool lookup.
         env = _qmd_env(vector_home())
         timeout = 30 if vector else 6
@@ -217,8 +232,16 @@ def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
             if cap_id in known:
                 scores[cap_id] = max(scores.get(cap_id, 0.0), float(h.get("score") or 0) or 1.0)
         top = max(scores.values(), default=0) or 1.0
+        if not scores:
+            _note_qmd_trouble("qmd returned no hit matching a known capability")
         return {k: v / top for k, v in scores.items()}
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        # Falling back to lexical ranking is right — a search must not fail
+        # because a helper binary did — but doing it *silently* is not. A dead
+        # vector path looks exactly like a slightly different ranking from the
+        # outside, which is how a 30s timeout went unnoticed here while the
+        # results merely got worse. Leave a trace instead.
+        _note_qmd_trouble(f"{type(exc).__name__}: {exc}")
         return {}
 
 
