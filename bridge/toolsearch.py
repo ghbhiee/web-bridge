@@ -73,47 +73,6 @@ def tokens(text: str) -> list[str]:
     return TOKEN_RE.findall((text or "").lower())
 
 
-def expand(terms: list[str]) -> set[str]:
-    out = set(terms)
-    for t in terms:
-        for syn in SYNONYMS.get(t, []):
-            out.update(tokens(syn))
-    # CJK bigrams: 电影 as a unit matters more than 电 and 影 apart
-    for a, b in zip(terms, terms[1:]):
-        if len(a) == 1 and len(b) == 1 and "一" <= a <= "鿿":
-            joined = a + b
-            out.add(joined)
-            out.update(tokens(" ".join(SYNONYMS.get(joined, []))))
-    return out
-
-
-def _field_text(cap: dict) -> dict:
-    return {
-        "title": cap.get("title") or "",
-        "description": cap.get("description") or "",
-        "id": cap.get("id", "").replace("-", " "),
-        "match": " ".join(cap.get("match") or []),
-        "params": " ".join((cap.get("params") or {}).keys()),
-    }
-
-
-# Title and description are what the author wrote to be found by; the id is
-# incidental and match is where it applies, not what it does.
-FIELD_WEIGHT = {"title": 3.0, "description": 2.0, "id": 1.0, "params": 0.6, "match": 0.4}
-
-
-def lexical_score(cap: dict, query_terms: set[str]) -> float:
-    if not query_terms:
-        return 0.0
-    total = 0.0
-    for field, text in _field_text(cap).items():
-        field_tokens = set(tokens(text))
-        if not field_tokens:
-            continue
-        hits = len(query_terms & field_tokens)
-        if hits:
-            total += FIELD_WEIGHT[field] * hits / math.sqrt(len(query_terms))
-    return total
 
 
 def cache_dir() -> "pathlib.Path":
@@ -362,30 +321,6 @@ def quality(cap_id: str, idx: dict) -> dict:
     return {"runs": runs, "ok": ok, "last": last}
 
 
-def _quality_factor(q: dict, feedback: dict) -> float:
-    """A tool that keeps failing should sink; an unproven one should not be buried.
-
-    Laplace-smoothed success rate, so one bad run does not condemn a tool and one
-    lucky run does not crown it. Explicit thumbs-down from an agent counts as
-    failures, because "it ran without throwing but answered wrongly" is invisible
-    to the journal.
-    """
-    runs = q["runs"] + feedback.get("bad", 0)
-    ok = q["ok"]
-    rate = (ok + 1) / (runs + 2)          # 0.5 when unproven
-    proven = math.log1p(min(runs, 20)) / math.log1p(20)   # 0..1
-    return 0.6 + 0.8 * rate + 0.4 * proven * rate         # ~0.6 (bad) … ~1.8 (good, proven)
-
-
-def _recency_factor(last: str) -> float:
-    if not last:
-        return 1.0
-    try:
-        seen = time.mktime(time.strptime(last[:19], "%Y-%m-%dT%H:%M:%S"))
-    except ValueError:
-        return 1.0
-    days = max(0.0, (time.time() - seen) / 86400)
-    return 1.15 if days < 3 else (1.05 if days < 14 else 1.0)
 
 
 def load_feedback() -> dict:
@@ -469,76 +404,64 @@ def catalogue(url: str = "") -> Optional[dict]:
 
 def search(query: str = "", url: str = "", limit: int = 5,
            include_generic: bool = True) -> list[dict]:
-    """Best tools for this intent. URL boosts, never filters."""
+    """Candidates for an intent, with the facts attached — not a verdict.
+
+    This used to multiply relevance by a Laplace-smoothed success rate, a
+    recency bonus and a URL boost, and hand back a ranked answer. That was the
+    gateway deciding which tool the agent should want, and it was consistently
+    worse at it than the agent: the scorer put extract-article above reader-mode
+    for "这篇文章太乱了想安静地读" and netflix-title-countries above
+    extract-tables for "把网页数据弄成 excel", both of which the model got right
+    from a plain list.
+
+    So retrieval only. Order is by textual relevance, because something has to
+    come first when the list is truncated. Track record, page match and any
+    thumbs-down travel *with* each row as data the agent can weigh — including
+    weighing them against its own read of the task, which is the part no
+    coefficient here can see.
+    """
     caps = capabilities.all_caps()
     if not caps:
         return []
     idx = journal._load_index()
     feedback = load_feedback()
-    terms = expand(tokens(query))
+    terms = set(tokens(query))
     semantic = qmd_scores(query, caps) if (query and qmd_available()) else {}
 
-    # Track record must not manufacture a match. A tool with five successful runs
-    # was topping "看看这页有什么可以抓的" over inspect-page on a faint keyword
-    # overlap: quality is a tie-breaker between plausible candidates, not a way
-    # to win from nowhere. So relevance is measured first, and anything far below
-    # the best match is dropped before quality is applied.
-    # Combine the two signals on the same scale. Raw lexical scores run far
-    # larger than qmd's 0..1, so adding them directly let keyword overlap drown
-    # the semantic result: qmd put reader-mode first for "这篇文章太乱了想安静地读"
-    # while the merged score still said extract-article, which shares more
-    # characters and means the wrong thing.
-    raw_lex = {}
+    rows = []
     for cap in caps:
         if not include_generic and cap.get("match") == ["*"]:
             continue
-        raw_lex[cap["id"]] = lexical_score(cap, terms)
-    top_lex = max(raw_lex.values(), default=0.0) or 1.0
-
-    relevances = {}
-    for cap_id, lex in raw_lex.items():
-        lex_n = lex / top_lex
-        sem_n = semantic.get(cap_id, 0.0)          # already 0..1
-        if semantic:
-            # semantics lead where they exist; keywords keep exact ids and
-            # parameter names findable
-            relevances[cap_id] = 0.65 * sem_n + 0.35 * lex_n
-        else:
-            relevances[cap_id] = lex_n
-    best_rel = max(relevances.values(), default=0.0)
-    floor = best_rel * 0.28
-
-    scored = []
-    for cap in caps:
-        if not include_generic and cap.get("match") == ["*"]:
-            continue
-        relevance = relevances.get(cap["id"], 0.0)
-        # The URL is a hint about context, not a gate: a tool for this page is
-        # more likely to be wanted, but a tool for another site is still the
-        # right answer when the user asked for what it does.
+        # Field weighting is retrieval, not judgement: a hit in the name means
+        # more than a hit somewhere in the prose, in any search engine ever
+        # built. What was removed from here is the other thing — multiplying the
+        # match by how well the tool has done before, which is the gateway
+        # deciding what the agent should want.
+        fields = ((f"{cap.get('id')} {cap.get('title') or ''}", 3.0),
+                  (" ".join((cap.get("params") or {}).keys()), 1.5),
+                  (cap.get("description") or "", 1.0))
+        lex = 0.0
+        for text, weight in fields:
+            low = text.lower()
+            lex += weight * sum(1 for t in terms if t in low)
+        lex = lex / (3.0 * (len(terms) or 1))       # 0..1-ish
+        relevance = max(semantic.get(cap["id"], 0.0), lex) if query else 0.0
         on_this_page = bool(url) and capabilities.matches(cap, url) and cap.get("match") != ["*"]
-        if not query:
-            relevance = 1.0 if on_this_page else 0.2
-        elif relevance < floor and not on_this_page:
-            continue                       # too weak a match for a track record to rescue
         q = quality(cap["id"], idx)
         fb = feedback.get(cap["id"], {})
-        score = relevance * _quality_factor(q, fb) * _recency_factor(q["last"])
-        if on_this_page:
-            score *= 1.6
-        if score <= 0:
-            continue
-        scored.append({
+        rows.append({
             "id": cap["id"],
             "title": cap.get("title") or cap["id"],
-            # one line only: the point is to keep the caller's context small
             "summary": (cap.get("description") or "").strip().split("。")[0][:110],
             "params": list((cap.get("params") or {}).keys()),
             "match": cap.get("match") or ["*"],
             "on_this_page": on_this_page,
             "runs": q["runs"], "ok_runs": q["ok"],
             "reported_bad": fb.get("bad", 0),
-            "score": round(score, 3),
+            "last_used": q["last"][:10] if q["last"] else "",
+            "relevance": round(relevance, 3),
         })
-    scored.sort(key=lambda r: r["score"], reverse=True)
-    return scored[:limit]
+    # On-page first only as a tiebreak for truncation, never as a filter: a tool
+    # built for another site is still the right answer when it does what you need.
+    rows.sort(key=lambda r: (-r["relevance"], not r["on_this_page"], r["id"]))
+    return rows[:limit]

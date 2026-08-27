@@ -200,25 +200,35 @@ async def main():
     probe = (f"// {marker}\n"
              'const rows = document.querySelectorAll(".item");\n'
              'return {count: rows.length, first: rows[0]?.textContent || null};')
-    runs, promoted = [], None
+    runs, hint, promoted = [], None, None
     for _ in range(3):
         code, data = await asyncio.to_thread(
             http, "POST", "/exec", {"code": probe, "url": "https://example.com/"})
         note = (data or {}).get("journal") or {}
         runs.append(note.get("runs"))
+        hint = hint or note.get("hint")
         promoted = promoted or note.get("promoted_to")
     counts_up = runs == [1, 2, 3]
     import capabilities as _caps
     results.append(("journal.counts_repeats", counts_up))
-    results.append(("journal.auto_promotes_on_third_run",
-                    bool(promoted) and _caps.get(promoted) is not None))
 
-    # 21. …and the promoted script is discoverable exactly like a hand-written one
+    # A repeat is reported to the agent and nothing else happens. Saving used to
+    # be automatic here, and it kept saving the wrong thing: the triviality
+    # filter rejected innerText, and the three-run rule picked the invariant
+    # `click send` half of a task over the half carrying the data. Whether a
+    # script is worth keeping, what it is called and which literals are really
+    # parameters are the caller's to decide — it has just used the answer.
+    results.append(("journal.reminds_instead_of_saving",
+                    bool(hint) and "web_save_capability" in hint
+                    and promoted is None))
+
+    # 21. …and nothing was written into the library behind the agent's back
     code, data = await asyncio.to_thread(
         http, "GET", "/capabilities?url=" + urllib.parse.quote("https://example.com/"))
     ids = [c["id"] for c in (data.get("capabilities") or [])]
-    results.append(("journal.promoted_is_discoverable",
-                    bool(promoted) and promoted in ids and bool(data.get("prior_scripts"))))
+    results.append(("journal.nothing_saved_without_being_asked",
+                    not any(i.startswith("auto-") for i in ids)
+                    and bool(data.get("prior_scripts"))))
 
     # 22. reformatting a script must NOT look like a new one, or nothing would
     #     ever repeat often enough to be promoted
@@ -431,28 +441,6 @@ async def main():
     results.append(("journal.separates_authoring_from_gaps",
                     all(g["looks_like_authoring"] for g in authoring)))
 
-    # and auto-promotion must not turn debugging one-liners into capabilities:
-    # `location.reload()` repeated during development became one, titled
-    # "🤖 location.reload();return 1"
-    results.append(("journal.rejects_trivial_promotions",
-                    _j6.looks_trivial("location.reload(); return 1")
-                    and _j6.looks_trivial("return document.title")
-                    and not _j6.looks_trivial(
-                        'document.querySelectorAll(".ad").forEach(e=>e.remove()); return {n:1}')))
-
-    # …and it must not reject real work either. The list of "is this script
-    # doing anything" markers had textContent but not innerText, so a script
-    # that read the page with innerText and parsed it was judged trivial and
-    # could never be promoted, no matter how often it worked. Found on
-    # 2026-08-27: a dsh session extracted a country list from unogs three times
-    # by hand and nothing was ever learned from it.
-    _extract = ('const t=document.body.innerText; const i=t.indexOf("found in"); '
-                'const lines=t.slice(i).split("\n").map(s=>s.trim()).filter(Boolean); '
-                'return JSON.stringify({count:lines.length, lines})')
-    results.append(("journal.innertext_extraction_is_promotable",
-                    not _j6.looks_trivial(_extract)
-                    and _j6.looks_trivial("return document.title")))
-
     # The index is derived data — rebuildable from capabilities/*.js — so it
     # belongs in a cache directory, never next to the config.
     import toolsearch as _ts0
@@ -474,74 +462,6 @@ async def main():
                     and _ts0.VECTOR_INDEX_NAME.startswith("web-bridge")
                     and (".cache" in str(vec) or "Local" in str(vec))))
 
-    # Reuse cannot depend on the agent remembering to look. On 2026-08-27 a
-    # session wrote ten scripts rediscovering how to send mail while a working
-    # recipe sat in the journal an hour old — it called neither discover nor the
-    # journal. So the first exec of a session on a host carries prior work back
-    # with it, and the labels have to be the raw source: summarise() falls back
-    # to normalise()d code, where string literals are md5 hashes.
-    import server as _srv0
-    # The suite runs against a throwaway state dir, so the journal starts empty:
-    # make the prior work this asserts on, rather than leaning on the developer's
-    # own log — which is how this test passed locally and failed in the suite.
-    _j6.record(kind="exec", url="https://prior.example.com/x", ok=True,
-               code='const items = document.querySelectorAll("div.email-item");\n'
-                    'return Array.from(items).map(e => e.innerText);')
-    _saved_gap = _j6.SESSION_GAP_S
-    _j6.SESSION_GAP_S = 0   # the record above is this second old; 1 would not clear it
-    try:
-        _hint = _srv0._prior_work_hint("https://prior.example.com/x")
-        _pushed = bool(_hint and _hint.get("scripts"))
-        _readable = _pushed and not any(
-            re.search(r"\((?:[0-9a-f]{8})\)", x.get("summary") or "")
-            for x in _hint["scripts"])
-        # …and it must stay quiet mid-session, or every exec repeats it
-        _j6.SESSION_GAP_S = 10 ** 9
-        _quiet_mid = _srv0._prior_work_hint("https://prior.example.com/x") is None
-    finally:
-        _j6.SESSION_GAP_S = _saved_gap
-    results.append(("journal.prior_work_pushed_once_per_session",
-                    _pushed and _readable and _quiet_mid))
-
-    # …and the wiring, separately: the check above exercises the builder, and
-    # passed unchanged when the call was deleted from /exec. What the caller
-    # actually receives is the thing that matters.
-    _j6.record(kind="exec", url="https://wired.example.com/p", ok=True,
-               code='const rows = document.querySelectorAll("tr");\nreturn rows.length;')
-    # The server is a separate process, so setting SESSION_GAP_S here would not
-    # reach it. Backdate the record instead: that exercises the real production
-    # gap rather than a value only the test believes in.
-    _idx_path = _j6.STATE_DIR / "exec-index.json"
-    _idx = json.loads(_idx_path.read_text(encoding="utf-8"))
-    _old_t = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 7200))
-    for _k, _v in _idx.items():
-        if _k.startswith("wired.example.com|"):
-            _v["last"] = _old_t
-    _idx_path.write_text(json.dumps(_idx, ensure_ascii=False), encoding="utf-8")
-    _code_w, _data_w = await asyncio.to_thread(
-        http, "POST", "/exec",
-        {"code": "return 1", "url": "https://wired.example.com/p"})
-    results.append(("exec.result_carries_prior_work",
-                    _code_w == 200 and bool((_data_w or {}).get("prior_work", {}).get("scripts"))))
-
-    # Per-value signatures hide a repeating task: four sends differing only in
-    # the recipient string were four signatures with one run each, so the
-    # threshold was never reached and nothing was ever said about it. The shape
-    # is not used as identity — promoting one variant would bake in one
-    # recipient — but a shape that repeats gets named out loud.
-    _shape_code = ('const marker = "%s"; const rows = document.querySelectorAll("div");'
-                   ' return {marker, n: rows.length};')
-    for _v in ("alpha", "beta", "gamma"):
-        _j6.record(kind="exec", url="https://shape.example.com/p", ok=True,
-                   code=_shape_code % _v)
-    _shaped = _j6.repeated_shape("shape.example.com", _shape_code % "delta")
-    # …and a different script on the same host must not be swept in
-    _other = _j6.repeated_shape(
-        "shape.example.com",
-        'const t = document.querySelectorAll("table"); return {tables: t.length, kind: "other"};')
-    results.append(("journal.repeating_shape_is_named",
-                    bool(_shaped) and _shaped["variants"] == 3 and _other is None))
-
     # The panel draws itself by calling the same endpoints an agent uses. Until
     # `ui=1`, doing so was journalled as agent activity: journal_reads and
     # discoveries were inflated, and the activity feed filled with its own
@@ -555,40 +475,6 @@ async def main():
     results.append(("journal.panel_reads_are_not_agent_activity",
                     code_ui == 200 and code_ui2 == 200 and code_ag == 200
                     and _quiet and _loud))
-
-    # A session tail is a guess about which script mattered -- replaying the
-    # rule over this journal promoted 17 tails of which about 7 were real. So it
-    # must be findable by search, where a wrong guess simply never ranks, and
-    # absent from the catalogue, whose whole premise is that the library fits in
-    # a briefing. Getting this backwards would spend the budget on noise.
-    import tempfile as _tf3, shutil as _sh3, pathlib as _pl3, json as _js3
-    _root = _pl3.Path(_tf3.mkdtemp())
-    try:
-        for _f in _pl3.Path("capabilities").glob("*.js"):
-            _sh3.copy(_f, _root / _f.name)
-        (_root / "auto").mkdir()
-        _meta = {"id": "auto-probe-provisional", "title": "🧪 说明：拉取鸿蒙反馈全量",
-                 "description": "自动沉淀（试用）", "kind": "other",
-                 "match": ["jarvis.example.com"], "params": {},
-                 "auto": True, "provisional": True}
-        (_root / "auto" / "auto-probe-provisional.js").write_text(
-            "/* @web-bridge-capability\n" + _js3.dumps(_meta, ensure_ascii=False)
-            + "\n*/\nreturn document.querySelectorAll('div').length;", encoding="utf-8")
-        _real_dir = _ts0.capabilities.CAP_DIR
-        _ts0.capabilities.CAP_DIR = _root
-        try:
-            _cat = _ts0.catalogue("https://jarvis.example.com/x")
-            _hidden = _cat is not None and not any(
-                "auto-probe-provisional" in l for l in _cat["lines"])
-            _found = any(r["id"] == "auto-probe-provisional" for r in
-                         _ts0.search("拉取鸿蒙相关的用户反馈",
-                                     url="https://jarvis.example.com/x", limit=5))
-        finally:
-            _ts0.capabilities.CAP_DIR = _real_dir
-    finally:
-        _sh3.rmtree(_root, ignore_errors=True)
-    results.append(("toolsearch.provisional_searchable_not_catalogued",
-                    _hidden and _found))
 
     # The vector query must go out as a structured `vec:` document, never a bare
     # sentence. A bare sentence makes qmd run query expansion through a 1.2GB
@@ -747,15 +633,20 @@ async def main():
     results.append(("toolsearch.url_boosts_not_filters",
                     any(t["id"] == "extract-tables" for t in off.get("tools", []))))
 
-    # and a tool reported as not doing its job must sink
-    before = next((t["score"] for t in data.get("tools", []) if t["id"] == "extract-tables"), 0)
+    # A tool reported as not doing its job is reported as such — and nothing
+    # more. It used to be multiplied down by a quality coefficient here, which
+    # is the gateway deciding for the agent; the agent reads "flagged 4 times"
+    # and weighs that against what it actually needs. Facts travel, verdicts do
+    # not.
     for _ in range(4):
         await asyncio.to_thread(http, "POST", "/tools/extract-tables/feedback",
                                 {"ok": False, "note": "test"})
     _, after_data = await asyncio.to_thread(
         http, "GET", "/tools/search?q=" + urllib.parse.quote("表格 存成 JSON") + "&limit=3")
-    after = next((t["score"] for t in after_data.get("tools", []) if t["id"] == "extract-tables"), 0)
-    results.append(("toolsearch.bad_reports_demote", before > 0 and after < before))
+    _row = next((t for t in after_data.get("tools", []) if t["id"] == "extract-tables"), None)
+    results.append(("toolsearch.bad_reports_are_visible",
+                    _row is not None and _row.get("reported_bad") == 4
+                    and "score" not in _row))
     try:
         (_ts.journal.STATE_DIR / "tool-feedback.json").unlink(missing_ok=True)
     except Exception:  # noqa: BLE001

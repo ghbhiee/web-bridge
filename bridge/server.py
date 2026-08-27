@@ -466,6 +466,9 @@ async def list_results(limit: int = 20):
     return {"ok": True, "results": results.recent(limit)}
 
 
+_PRIOR_TOLD: dict[str, float] = {}
+
+
 def _prior_work_hint(url: str) -> Optional[dict]:
     """On the first exec of a session, say what has already worked on this host.
 
@@ -484,9 +487,13 @@ def _prior_work_hint(url: str) -> Optional[dict]:
     host = journal.host_of(url)
     if not host or host in ("?", "file:"):
         return None
+    # Throttle rather than judge: repeat this at most every 20 minutes per host.
+    # In-process and deliberately dumb — it decides nothing about the content,
+    # only how often the same facts are restated.
+    now = time.monotonic()
+    if now - _PRIOR_TOLD.get(host, -1e9) < 1200:
+        return None
     try:
-        if not journal.first_exec_of_session(host):
-            return None
         prior = journal.search(host=host, limit=5)
     except Exception:  # noqa: BLE001
         return None
@@ -506,6 +513,7 @@ def _prior_work_hint(url: str) -> Optional[dict]:
                 return line[:90]
         return summary[:90]
 
+    _PRIOR_TOLD[host] = now
     return {
         "note": f"这个站点以前跑通过下面这些（{host}）。先看一眼再决定要不要自己写："
                 "取代码 web_journal / `wb log --host " + host + " --code`。",
@@ -620,10 +628,8 @@ async def exec_js(req: ExecReq):
                        ms=int((time.monotonic() - started) * 1000))
         raise
     landed = data.get("tab_url") or req.url or ""
-    # Before journalling this run, not after: recording it sets `last` for this
-    # host to now, so first_exec_of_session() would always answer "no" and the
-    # hint would never fire. Caught only by asserting on the endpoint's payload
-    # — the builder tested in isolation looked fine either way.
+    # Built before this run is journalled, so "what has been done here" means
+    # what was done *before* this call rather than including it.
     prior = _prior_work_hint(landed)
     note = journal.record(kind="exec", code=req.code, args=req.args,
                           url=landed,
@@ -635,16 +641,6 @@ async def exec_js(req: ExecReq):
         payload["tools_available"] = hint
     if prior:
         payload["prior_work"] = prior
-    # Said at the moment it is happening: the caller has just written the same
-    # script again with different values, and neither the promotion threshold
-    # nor a later report will ever mention it, because per-value signatures make
-    # each one look new.
-    try:
-        shaped = journal.repeated_shape(journal.host_of(landed), req.code)
-    except Exception:  # noqa: BLE001
-        shaped = None
-    if shaped:
-        payload["same_script_again"] = shaped
     return JSONResponse(payload)
 
 
@@ -712,14 +708,6 @@ async def list_capabilities(url: str = "", site: str = "", ui: bool = False):
     if site and not url:
         s = config.SITES.get(site) or {}
         url = (s.get("home") or "")
-    # A session starting here means the previous one on this host is over, so
-    # this is when its last working script can be saved. Done before the listing
-    # is built, so it appears in this very response rather than the next one.
-    if url:
-        try:
-            journal.promote_session_tail(journal.host_of(url))
-        except Exception:  # noqa: BLE001
-            pass
     caps = capabilities.for_url(url) if (url or site) else capabilities.all_caps()
     out = {"ok": True, "url": url, "count": len(caps),
            "capabilities": [capabilities.public(c) for c in caps]}
