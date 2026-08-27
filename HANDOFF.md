@@ -287,6 +287,8 @@ payload 验证过：变成可见文本，不执行。
   - 所以在没有这个模型的机器上，**第一次向量搜索会静默等下载 1.2GB，看起来就是卡死**。
     实测：把模型文件挪走后跑 `vsearch`，>75s 无输出；挪回来后 2.7s 返回。
   - 改用 `vec:` 前缀后：5 条查询 16.0s → 6.3s，**首位命中 5/5 完全一致**，质量没有代价。
+  - **改完之后 web-bridge 对「这个模型被删掉」免疫了**（实测：把模型文件挪走，向量路径
+    1.0s / 0.8s 正常返回、不触发下载；修复前同样条件挂 >75s）。
   - 推论：`qmd vsearch` **根本不重排**（`--help` 写的是 "Vector similarity only"，
     输出里也从来没有 `Reranking N chunks` 那行），所以给它传 `--no-rerank` 是空操作，已删。
     我之前那句「5.7s 是 --no-rerank 的功劳」也站不住——真正的变量是有没有走扩写。
@@ -307,13 +309,15 @@ payload 验证过：变成可见文本，不执行。
   不分层是有意的——多一层会让「名字唯一」这条约束变模糊，而 collection 撞名
   在 qmd 里恰恰是**静默失败**（悄悄落回全库搜索，不报错）。
   代码不依赖 llm-wiki 的 `kb.py`，qmd 调用是自足的，所以没装 llm-wiki 的机器照样能跑。
-  **`kb.py` 默认管不了这个索引**（实测：`kb.py status --kb web-bridge-tools` 报「找不到库」，
-  因为它只认自己注册表 `~/.config/llm-wiki/libraries.json` 里的库）。想让它管得先注册：
-  `python3 ~/.claude/skills/llm-wiki/scripts/kb.py index ~/.cache/llm-wiki/web-bridge-tools/docs --name web-bridge-tools`。
-  没注册也完全不影响 web-bridge 自己用。
-  两边布局实测兼容（同一份 embed/rerank 模型、同样的 collection 结构），差别只是 kb.py 会多写
-  `kb.json` 和一个 `ignore:` 块——所以 `_write_qmd_config` 改成了**只在配置不再指向我们时才重写**，
-  不再无条件覆盖，否则每次重建都会抹掉对方写的东西、对方再加回来。
+  **布局即接口**：装了 llm-wiki 的机器上，`kb.py` 靠这个目录布局就能接管，
+  **不用注册、不用 `kb.json`**（2026-08-26 实测通过）：
+  `kb.py status --kb web-bridge-tools` 正确报出 14 个 md / 14 条向量，
+  `kb.py search "..." --kb web-bridge-tools --fast` 直接出结果，`kb.py libs` 把它列在
+  「缓存里的索引（未登记）」一节。两边共用同一份模型下载。
+  （早期版本的 kb.py 只认注册表、报「找不到库」，llm-wiki 那边已经改成按布局解析。）
+  `kb.py` 会往 `index.yml` 里加一个 `ignore:` 块，所以 `_write_qmd_config` 是
+  **只在配置不再指向我们时才重写**，不无条件覆盖——否则每次重建都会抹掉对方写的东西、
+  对方再加回来，两个主人抢一个文件。实测 kb.py 加的 `ignore:` 块在我这边重建后仍然保留。
   `index.yml` 里显式写 embed/rerank 模型（和 llm-wiki 用同一对，共用一份模型下载）。
   **不要声明 `generate`**（1.2GB 查询扩展模型，只有 `qmd query` 会用，本项目从不调用）——
   注意 qmd 会在每次 `update` 时把这行**自动回填**进 `index.yml`，所以删模型文件是留不住的，
