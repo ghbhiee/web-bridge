@@ -445,6 +445,22 @@ async def main():
     results.append(("toolsearch.index_lives_in_cache",
                     (".cache" in cache or "Local" in cache) and "config" not in cache))
 
+    # Below a size budget the whole library is handed over instead of being
+    # filtered: the model matches "把网页数据弄成 excel" to extract-tables better
+    # than a synonym table does, and cannot match what it was never shown.
+    cat = _ts0.catalogue("https://unogs.com/")
+    results.append(("toolsearch.catalogue_fits_and_is_complete",
+                    cat is not None and cat["count"] == len(_ts0.capabilities.all_caps())
+                    and cat["chars"] < _ts0.CATALOGUE_BUDGET_CHARS
+                    and any("★本页" in l for l in cat["lines"])))
+
+    # …and once it no longer fits, ranking takes over rather than truncating
+    saved_budget = _ts0.CATALOGUE_BUDGET_CHARS
+    _ts0.CATALOGUE_BUDGET_CHARS = 50
+    results.append(("toolsearch.falls_back_to_ranking_when_large",
+                    _ts0.catalogue("") is None and bool(_ts0.search("表格", limit=3))))
+    _ts0.CATALOGUE_BUDGET_CHARS = saved_budget
+
     # Retrieval by intent, not by which URL is open. Looking tools up through
     # `match` alone meant a tool for another site was invisible even when it did
     # exactly what was asked — the user's intent lost to where they were standing.
@@ -514,10 +530,12 @@ async def main():
     else:
         results.append(("agents.brief_lists_existing_tools", True))
 
-    # a page with no site tools must not get a list of six generic ones dressed
-    # up as "already have these" — that is noise that trains the agent to skip it
-    results.append(("agents.no_tool_block_when_nothing_specific",
-                    _agents5.available_tools_block("https://no-such-site-xyz.test/") == ""))
+    # A page with no site-specific tool must not claim it has some — but it still
+    # gets the catalogue, because a tool written for another site is often the
+    # right answer and the model can only choose what it has been shown.
+    blank = _agents5.available_tools_block("https://no-such-site-xyz.test/")
+    results.append(("agents.no_false_site_tools_claim",
+                    "这个页面已经有" not in blank and "Agent Tools" in blank))
 
     # "did it use the tools I saved, or write JS again?" had no answer short of
     # reading the JSONL by hand — the reuse rate is that answer.

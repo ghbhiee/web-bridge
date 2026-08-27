@@ -201,12 +201,13 @@ TOOLS = [
     },
     {
         "name": "web_find_tool",
-        "description": ("**Do this before writing a scraper.** Finds an existing tool by what you "
-                        "are trying to DO, ranked by relevance and by whether it has actually "
-                        "worked before. Unlike web_capabilities it is not limited to the page you "
-                        "are on: a tool built for another site still surfaces when it does what you "
-                        "need — pass `url` and tools for that page get a boost, not a monopoly. "
-                        "Returns a handful of one-line entries, not a catalogue."),
+        "description": ("**Do this before writing a scraper.** Call it with no query to get the "
+                        "whole tool library as one-liners (it is small; read it and pick — you "
+                        "judge relevance better than a keyword scorer does). Pass a query only "
+                        "once the library is too large to list, and it will rank by relevance and "
+                        "by whether each tool has actually worked. Either way it is NOT limited to "
+                        "the page you are on: a tool built for another site is still the right "
+                        "answer when it does what you need."),
         "inputSchema": {"type": "object", "properties": {
             "query": {"type": "string", "description": "what you are trying to do, in your own words"},
             "url": {"type": "string", "description": "the page you are working on (a boost, optional)"},

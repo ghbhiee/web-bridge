@@ -985,6 +985,14 @@ async def tools_search(q: str = "", url: str = "", limit: int = 5, generic: bool
     tool is relevant because of what it does, not because of where the user is
     standing when they ask.
     """
+    # With no query, hand back the whole library if it fits: picking for the
+    # caller is worse than letting it read fourteen one-liners and choose.
+    if not q:
+        cat = toolsearch.catalogue(url)
+        if cat:
+            return {"ok": True, "query": q, "catalogue": cat["lines"],
+                    "count": cat["count"],
+                    "note": "全部工具都在这里了，自己挑；★本页 = 为当前页面写的"}
     return {"ok": True, "query": q,
             "tools": toolsearch.search(q, url, max(1, min(limit, 10)), generic)}
 

@@ -159,7 +159,10 @@ def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
         cmd = ["qmd", "vsearch" if os.environ.get("WEB_BRIDGE_QMD_VECTOR") == "1" else "search",
                query, "--json"]
         # Hard timeout: a hanging search binary must never hold up a tool lookup.
-        out = subprocess.run(cmd, cwd=index_dir, capture_output=True, text=True, timeout=6)
+        env = _qmd_env(cache_dir() / "qmd")
+        timeout = 25 if os.environ.get("WEB_BRIDGE_QMD_VECTOR") == "1" else 6
+        out = subprocess.run(cmd, cwd=index_dir, env=env,
+                             capture_output=True, text=True, timeout=timeout)
         if out.returncode != 0 or not out.stdout.strip():
             return {}
         data = json.loads(out.stdout)
@@ -179,6 +182,45 @@ def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
         return {k: v / top for k, v in scores.items()}
     except Exception:  # noqa: BLE001
         return {}
+
+
+# The models that work on this machine, copied from the llm-wiki setup rather
+# than guessed. Without a models block qmd falls back to a default the local
+# runtime cannot build (node-llama-cpp fails to compile its Metal shaders) and
+# vsearch hangs — which is exactly why the vector path looked broken while
+# llm-wiki's worked fine.
+QMD_MODELS = {
+    "embed": "hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf",
+    "rerank": "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf",
+}
+
+
+def _qmd_env(index_home: "pathlib.Path") -> dict:
+    """Point qmd at OUR index, not the shared global one.
+
+    Two reasons this has to be isolated: the global index carries collections
+    rooted elsewhere (one of them the repo, which leaked HANDOFF.md into tool
+    search results), and the model configuration lives per-index — the global one
+    has none.
+    """
+    env = dict(os.environ)
+    env["INDEX_PATH"] = str(index_home / "index.sqlite")
+    env["QMD_CONFIG_DIR"] = str(index_home)
+    return env
+
+
+def _write_qmd_config(index_home: "pathlib.Path", docs: "pathlib.Path") -> None:
+    cfg = index_home / "index.yml"
+    body = (
+        "collections:\n"
+        "  web-bridge-tools:\n"
+        f"    path: {docs}\n"
+        '    pattern: "**/*.md"\n'
+        "models:\n"
+        + "".join(f"  {k}: {v}\n" for k, v in QMD_MODELS.items())
+    )
+    if not cfg.exists() or cfg.read_text(encoding="utf-8") != body:
+        cfg.write_text(body, encoding="utf-8")
 
 
 def _qmd_index(caps: list[dict]) -> str:
@@ -205,12 +247,21 @@ def _qmd_index(caps: list[dict]) -> str:
             stale.unlink(missing_ok=True)
             changed = True
 
-    stamp = base / ".indexed"
+    home = cache_dir() / "qmd"
+    home.mkdir(parents=True, exist_ok=True)
+    _write_qmd_config(home, base)
+
+    stamp = home / ".indexed"
     if changed or not stamp.exists():
-        registered = stamp.exists()
-        cmd = ["qmd", "update"] if registered else ["qmd", "collection", "add", "."]
+        env = _qmd_env(home)
         try:
-            subprocess.run(cmd, cwd=str(base), capture_output=True, text=True, timeout=30)
+            subprocess.run(["qmd", "update"], cwd=str(base), env=env,
+                           capture_output=True, text=True, timeout=60)
+            if os.environ.get("WEB_BRIDGE_QMD_VECTOR") == "1":
+                # embeddings are only needed for the vector path, and generating
+                # them costs seconds — do it when that path is actually in use
+                subprocess.run(["qmd", "embed"], cwd=str(base), env=env,
+                               capture_output=True, text=True, timeout=180)
             stamp.write_text(time.strftime("%Y-%m-%dT%H:%M:%S"), encoding="utf-8")
         except Exception:  # noqa: BLE001
             pass
@@ -279,6 +330,45 @@ def record_feedback(cap_id: str, ok: bool, note: str = "") -> dict:
     journal.STATE_DIR.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return entry
+
+
+# Below this, the whole library fits in a briefing and the model does the
+# matching itself. Above it, ranking has to shortlist first.
+CATALOGUE_BUDGET_CHARS = 2600
+
+
+def catalogue(url: str = "") -> Optional[dict]:
+    """The whole library as one-liners — when it is small enough to just hand over.
+
+    The paraphrase failures ("把网页数据弄成 excel 能用的样子" → extract-tables) are
+    a semantic matching problem, and the best semantic matcher in this system is
+    the model reading the briefing, not a scorer built out of a synonym table.
+    Fourteen tools cost about 570 tokens to list in full; against that, choosing
+    for the model is both worse and unnecessary.
+
+    Returns None once the library outgrows the budget, at which point search()
+    shortlists instead — the ranking is not wasted, it just moves to where it is
+    actually needed.
+    """
+    caps = capabilities.all_caps()
+    if not caps:
+        return None
+    idx = journal._load_index()
+    feedback = load_feedback()
+    lines, total = [], 0
+    for cap in sorted(caps, key=lambda c: c.get("id", "")):
+        q = quality(cap["id"], idx)
+        fb = feedback.get(cap["id"], {})
+        here = " ★本页" if url and capabilities.matches(cap, url) and cap.get("match") != ["*"] else ""
+        used = f" ({q['ok']}/{q['runs']}次成功)" if q["runs"] else ""
+        bad = " ⚠被标记不好用" if fb.get("bad", 0) >= 2 else ""
+        desc = (cap.get("description") or "").strip().split("。")[0][:64]
+        line = f"- `{cap['id']}`{here} {cap.get('title') or ''}{used}{bad} — {desc}"
+        total += len(line)
+        if total > CATALOGUE_BUDGET_CHARS:
+            return None
+        lines.append(line)
+    return {"count": len(lines), "chars": total, "lines": lines}
 
 
 def search(query: str = "", url: str = "", limit: int = 5,

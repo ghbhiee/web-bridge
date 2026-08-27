@@ -231,6 +231,20 @@ MCP 工具名：`web_capabilities`（带 `capability` 参数则返回单个能�
 几种行内格式**——从页面文本到活markup 没有通路。真机用 `<img onerror>` / `<script>`
 payload 验证过：变成可见文本，不执行。
 
+### 先别急着上向量检索：语料小的时候，LLM 就是最好的语义匹配器
+
+全部 14 个能力的一行摘要加起来 **~580 token**。对这个体量，「替模型挑」比「把目录给模型」
+更差——它天生跨语言、懂口语，而且已经在环路里。所以 `catalogue()` 在总量低于
+`CATALOGUE_BUDGET_CHARS`（2600 字符）时，**把整个库列进简报**，超了才退回排序粗筛。
+
+实测（这两条正是词法打分器答错的）：
+- 「把网页上的数据弄成 excel 能用的样子」→ 模型选 `extract-tables` ✅（打分器选了 netflix）
+- 「这篇文章排版太乱了想安静地读」→ 模型选 `reader-mode`，并主动解释为什么不是
+  `extract-article`（"那个是抽成文本给你读，页面本身不变"）✅
+
+**这才是「向量检索跑不起来」的正确答案**：不是换一个向量库，是这个规模根本不需要向量。
+排序逻辑没有白写——它是库长大以后的粗筛器，`CATALOGUE_BUDGET_CHARS` 就是切换点。
+
 ### 按意图找工具（`bridge/toolsearch.py`）
 
 `wb find "把网页表格存成 JSON"` / MCP `web_find_tool` / `GET /tools/search?q=&url=`
@@ -261,10 +275,16 @@ payload 验证过：变成可见文本，不执行。
 
 **qmd 集成：接好了，但实测在这个语料上贡献为零**（qmd 装了就用，`WEB_BRIDGE_QMD=0` 关掉）：
 - `qmd search`（BM25，0.13s）：开关它，10 条查询的排序**一模一样**
-- `qmd vsearch`（向量，才是真正能补语义的那条）：**本机跑不起来**——
-  `node-llama-cpp: ggml_metal_library_init_from_source: error compiling source`，
-  2 分钟不返回。工具检索在热路径上（建简报、exec 提示、每次 agent 提问），
-  所以向量路径默认不走，要试设 `WEB_BRIDGE_QMD_VECTOR=1`，且所有 qmd 调用都有 6 秒硬超时。
+- `qmd vsearch`（向量）：**这台机器上跑不起来，但不是本项目的问题**——
+  `xcrun metal` 报 `missing Metal Toolchain`，node-llama-cpp 编译不出 shader，
+  于是 `ggml_metal_library_init_from_source: error compiling source` 后无限等待。
+  **llm-wiki 自己的 ob 库现在也一样卡**，同一个报错，所以这是机器层面的
+  （`xcodebuild -downloadComponent MetalToolchain` 可修，需要能连上苹果的资产服务器）。
+  向量路径默认不走，要试设 `WEB_BRIDGE_QMD_VECTOR=1`；所有 qmd 调用都有硬超时。
+- 索引隔离：`INDEX_PATH` + `QMD_CONFIG_DIR` 指向 `~/.cache/web-bridge/qmd/`，
+  `index.yml` 里显式写 embed/rerank 模型（照抄 llm-wiki 里能用的那套）。
+  **之前用全局索引是我的错**：全局索引没有 models 配置，而且里面那个根在仓库目录的
+  collection 让 HANDOFF.md 混进了搜索结果。`qmd embed` 在隔离索引上是能跑的（14/14 已嵌入）。
 
 **当前命中率（10 条基准查询）：6/10**。直白问法（表格 / table / 查电影在哪些国家能看 /
 视频文字版 / 抓列表翻页）基本都对；**口语化问法仍然不行**——

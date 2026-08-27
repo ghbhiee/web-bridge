@@ -147,13 +147,16 @@ def available_tools_block(url: str) -> str:
         import toolsearch
         site = [t for t in toolsearch.search("", url, limit=4, include_generic=False)
                 if t["on_this_page"]]
+        cat = toolsearch.catalogue(url)
     except Exception:  # noqa: BLE001
         return ""
-    if not site:
+    if not site and not cat:
         return ""
     # Ranked and capped: a briefing is context the user pays for on every turn,
     # so this lists the few best rather than everything that matches.
-    lines = ["", "**这个页面已经有现成的 Agent Tools，优先用它们，别重写：**"]
+    lines = []
+    if site:
+        lines += ["", "**这个页面已经有现成的 Agent Tools，优先用它们，别重写：**"]
     for t in site:
         params = ", ".join(t["params"])
         used = f"（用过 {t['runs']} 次）" if t["runs"] else ""
@@ -161,10 +164,20 @@ def available_tools_block(url: str) -> str:
                      f"{'  参数：' + params if params else ''}")
         if t["summary"]:
             lines.append(f"    {t['summary']}")
-    lines += ["",
-              "用 `web_run_capability` 调。**别的页面的工具也可能正合用**——"
-              "按你要做的事去搜：`web_find_tool`（它按相关性和过往成功率排序，不受当前网址限制）。",
-              "工具跑了但结果不对，用 `web_rate_tool` 标一下，以后它就会往后排。"]
+    lines += ["", "用 `web_run_capability` 调。"]
+    if cat:
+        # The whole library, because it fits. Matching "把网页数据弄成 excel" to
+        # extract-tables is something the model does better than any scorer here,
+        # and it cannot do it for tools it was never shown.
+        lines += ["",
+                  f"**全部 {cat['count']} 个 Agent Tools**（★本页 = 为当前页面写的；"
+                  f"括号里是过往成功次数。**别被当前网址局限**——别的站点的工具只要合用就用）：",
+                  *cat["lines"]]
+    else:
+        lines += ["",
+                  "工具太多列不下，按你要做的事去搜：`web_find_tool`（按相关性和过往成功率排序，"
+                  "不受当前网址限制）。"]
+    lines.append("工具跑了但结果不对，用 `web_rate_tool` 标一下，以后它就会往后排。")
     return "\n".join(lines)
 
 
