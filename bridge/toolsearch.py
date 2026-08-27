@@ -432,7 +432,13 @@ def catalogue(url: str = "") -> Optional[dict]:
     shortlists instead — the ranking is not wasted, it just moves to where it is
     actually needed.
     """
-    caps = capabilities.all_caps()
+    # Provisional tools (session tails) are deliberately absent here. They are a
+    # guess about which script mattered -- roughly 7 of 17 when the rule was
+    # replayed over this journal -- and the catalogue only works because the
+    # whole library fits in a briefing. Letting guesses in would spend that
+    # budget on noise and, past the limit, disable the catalogue outright.
+    # search() still ranks them, which is where a wrong guess costs nothing.
+    caps = [c for c in capabilities.all_caps() if not c.get("provisional")]
     if not caps:
         return None
     idx = journal._load_index()

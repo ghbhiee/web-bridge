@@ -274,11 +274,66 @@ def looks_trivial(code: str) -> bool:
     return len(stripped) < 30
 
 
-def maybe_promote(slot: dict) -> Optional[str]:
-    """Write a repeated script into the library. Deliberately automatic: relying
-    on an agent to remember `save_capability` is exactly why the library never
-    grew on its own."""
-    if slot.get("promoted_to") or slot["ok_runs"] < PROMOTE_AFTER:
+SESSION_GAP_S = int(config.CFG.get("session_gap_s", 1800))
+
+
+def promote_session_tail(host: str) -> Optional[str]:
+    """Save the last thing that worked here, once the session that produced it
+    is over.
+
+    The three-successes rule almost never fires. Measured on this machine: two
+    agents given the identical task on the same site wrote 26 scripts between
+    them with zero signatures in common, and across 30 days only 4 of 161
+    scripts ever repeated three times. Agents do not repeat scripts -- they
+    repeat *tasks*, exploring with a dozen throwaway probes and finishing with
+    one that does the job. The last successful script of a session is that one.
+
+    It is a heuristic, not a fact: replaying the rule over this journal, 17
+    tails passed the triviality filter and roughly 7 were real deliverables --
+    the rest were probes that happened to run last. So a tail is promoted
+    `provisional`: findable by search, where a wrong guess simply never ranks,
+    but kept out of the catalogue, where it would spend tokens on every listing
+    and push the library past the budget that makes the catalogue possible.
+    """
+    if not host or host in ("?", "file:"):
+        return None
+    idx = _load_index()
+    tail = None
+    for key, slot in idx.items():
+        if not key.startswith(host + "|") or not slot.get("code"):
+            continue
+        if slot.get("promoted_to") or not slot.get("ok_runs"):
+            continue
+        if not slot.get("last") or (tail and slot["last"] <= tail["last"]):
+            continue
+        tail = slot
+    if not tail:
+        return None
+    try:
+        seen = time.mktime(time.strptime(tail["last"][:19], "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, KeyError):
+        return None
+    if time.time() - seen < SESSION_GAP_S:
+        return None                       # still mid-session; it may not be the tail yet
+    promoted = maybe_promote(tail, provisional=True)
+    if promoted:
+        tail["promoted_to"] = promoted
+        _save_index(idx)
+    return promoted
+
+
+def maybe_promote(slot: dict, provisional: bool = False) -> Optional[str]:
+    """Write a script into the library. Deliberately automatic: relying on an
+    agent to remember `save_capability` is exactly why the library never grew on
+    its own.
+
+    `provisional` marks a session tail (see promote_session_tail): the same file
+    in the same place, but flagged so the catalogue can leave it out. A repeat
+    promotion has three successes behind it; a tail has a guess.
+    """
+    if slot.get("promoted_to"):
+        return None
+    if not provisional and slot["ok_runs"] < PROMOTE_AFTER:
         return None
     code = slot.get("code") or ""
     if not code.strip() or looks_trivial(code):
@@ -288,7 +343,7 @@ def maybe_promote(slot: dict) -> Optional[str]:
         return cap_id
     meta = {
         "id": cap_id,
-        "title": f"🤖 {slot.get('summary') or '自动沉淀的脚本'}",
+        "title": ("🧪 " if provisional else "🤖 ") + (slot.get("summary") or "自动沉淀的脚本"),
         "description": (f"自动沉淀：这段脚本在 {slot['host']} 上成功运行了 {slot['ok_runs']} 次，"
                         f"由 web-bridge 从 exec 日志里自动存成能力（首次 {slot['first']}）。"
                         f"标题和参数说明是机器生成的，确认有用就用 save_capability 覆盖同名文件、写好描述。"),
@@ -296,6 +351,7 @@ def maybe_promote(slot: dict) -> Optional[str]:
         "match": [slot["host"]] if slot["host"] and slot["host"] != "?" else ["*"],
         "params": _params_from_args(slot.get("args")),
         "auto": True,
+        "provisional": provisional,
         "runs": slot["ok_runs"],
         "first_seen": slot["first"],
     }

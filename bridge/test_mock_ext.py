@@ -472,6 +472,40 @@ async def main():
                     and _ts0.VECTOR_INDEX_NAME.startswith("web-bridge")
                     and (".cache" in str(vec) or "Local" in str(vec))))
 
+    # A session tail is a guess about which script mattered -- replaying the
+    # rule over this journal promoted 17 tails of which about 7 were real. So it
+    # must be findable by search, where a wrong guess simply never ranks, and
+    # absent from the catalogue, whose whole premise is that the library fits in
+    # a briefing. Getting this backwards would spend the budget on noise.
+    import tempfile as _tf3, shutil as _sh3, pathlib as _pl3, json as _js3
+    _root = _pl3.Path(_tf3.mkdtemp())
+    try:
+        for _f in _pl3.Path("capabilities").glob("*.js"):
+            _sh3.copy(_f, _root / _f.name)
+        (_root / "auto").mkdir()
+        _meta = {"id": "auto-probe-provisional", "title": "🧪 说明：拉取鸿蒙反馈全量",
+                 "description": "自动沉淀（试用）", "kind": "other",
+                 "match": ["jarvis.example.com"], "params": {},
+                 "auto": True, "provisional": True}
+        (_root / "auto" / "auto-probe-provisional.js").write_text(
+            "/* @web-bridge-capability\n" + _js3.dumps(_meta, ensure_ascii=False)
+            + "\n*/\nreturn document.querySelectorAll('div').length;", encoding="utf-8")
+        _real_dir = _ts0.capabilities.CAP_DIR
+        _ts0.capabilities.CAP_DIR = _root
+        try:
+            _cat = _ts0.catalogue("https://jarvis.example.com/x")
+            _hidden = _cat is not None and not any(
+                "auto-probe-provisional" in l for l in _cat["lines"])
+            _found = any(r["id"] == "auto-probe-provisional" for r in
+                         _ts0.search("拉取鸿蒙相关的用户反馈",
+                                     url="https://jarvis.example.com/x", limit=5))
+        finally:
+            _ts0.capabilities.CAP_DIR = _real_dir
+    finally:
+        _sh3.rmtree(_root, ignore_errors=True)
+    results.append(("toolsearch.provisional_searchable_not_catalogued",
+                    _hidden and _found))
+
     # The vector query must go out as a structured `vec:` document, never a bare
     # sentence. A bare sentence makes qmd run query expansion through a 1.2GB
     # model it will silently download on a machine that lacks it -- which is what

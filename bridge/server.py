@@ -647,6 +647,14 @@ async def list_capabilities(url: str = "", site: str = ""):
     if site and not url:
         s = config.SITES.get(site) or {}
         url = (s.get("home") or "")
+    # A session starting here means the previous one on this host is over, so
+    # this is when its last working script can be saved. Done before the listing
+    # is built, so it appears in this very response rather than the next one.
+    if url:
+        try:
+            journal.promote_session_tail(journal.host_of(url))
+        except Exception:  # noqa: BLE001
+            pass
     caps = capabilities.for_url(url) if (url or site) else capabilities.all_caps()
     out = {"ok": True, "url": url, "count": len(caps),
            "capabilities": [capabilities.public(c) for c in caps]}
