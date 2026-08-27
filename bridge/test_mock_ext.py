@@ -524,6 +524,24 @@ async def main():
     results.append(("exec.result_carries_prior_work",
                     _code_w == 200 and bool((_data_w or {}).get("prior_work", {}).get("scripts"))))
 
+    # Per-value signatures hide a repeating task: four sends differing only in
+    # the recipient string were four signatures with one run each, so the
+    # threshold was never reached and nothing was ever said about it. The shape
+    # is not used as identity — promoting one variant would bake in one
+    # recipient — but a shape that repeats gets named out loud.
+    _shape_code = ('const marker = "%s"; const rows = document.querySelectorAll("div");'
+                   ' return {marker, n: rows.length};')
+    for _v in ("alpha", "beta", "gamma"):
+        _j6.record(kind="exec", url="https://shape.example.com/p", ok=True,
+                   code=_shape_code % _v)
+    _shaped = _j6.repeated_shape("shape.example.com", _shape_code % "delta")
+    # …and a different script on the same host must not be swept in
+    _other = _j6.repeated_shape(
+        "shape.example.com",
+        'const t = document.querySelectorAll("table"); return {tables: t.length, kind: "other"};')
+    results.append(("journal.repeating_shape_is_named",
+                    bool(_shaped) and _shaped["variants"] == 3 and _other is None))
+
     # The panel draws itself by calling the same endpoints an agent uses. Until
     # `ui=1`, doing so was journalled as agent activity: journal_reads and
     # discoveries were inflated, and the activity feed filled with its own

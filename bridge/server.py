@@ -635,6 +635,16 @@ async def exec_js(req: ExecReq):
         payload["tools_available"] = hint
     if prior:
         payload["prior_work"] = prior
+    # Said at the moment it is happening: the caller has just written the same
+    # script again with different values, and neither the promotion threshold
+    # nor a later report will ever mention it, because per-value signatures make
+    # each one look new.
+    try:
+        shaped = journal.repeated_shape(journal.host_of(landed), req.code)
+    except Exception:  # noqa: BLE001
+        shaped = None
+    if shaped:
+        payload["same_script_again"] = shaped
     return JSONResponse(payload)
 
 

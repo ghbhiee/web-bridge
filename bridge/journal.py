@@ -277,6 +277,53 @@ def looks_trivial(code: str) -> bool:
 SESSION_GAP_S = int(config.CFG.get("session_gap_s", 1800))
 
 
+STRING_LITERAL = re.compile(
+    r'"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\'|`[^`\\]*(?:\\.[^`\\]*)*`')
+
+
+def shape_of_code(code: str) -> str:
+    """The script with its literals blanked — same work, different data.
+
+    normalise() hashes each literal by value, which is right for identity but
+    means a script that differs only in an email address is a different script.
+    Four sends to four addresses were four signatures, one run each, so nothing
+    ever reached the promotion threshold. This collapses them.
+
+    Not used as the identity: promoting one variant verbatim would bake in one
+    recipient and call it a send tool. What repeats here is a *shape*, and a
+    shape that repeats with different values is asking to be a capability with
+    parameters -- which is a thing to say out loud, not to guess at.
+    """
+    body = STRING_LITERAL.sub("§", code or "")
+    body = re.sub(r"//[^\n]*", "", body)
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    return re.sub(r"\s+", "", body)
+
+
+def repeated_shape(host: str, code: str) -> Optional[dict]:
+    """Has this same script, with other values in it, run here before?"""
+    if not code or not host:
+        return None
+    shape = shape_of_code(code)
+    if len(shape) < 60:                   # too small to mean anything
+        return None
+    variants, runs = [], 0
+    for key, slot in _load_index().items():
+        if not key.startswith(host + "|") or not slot.get("code"):
+            continue
+        if shape_of_code(slot["code"]) != shape:
+            continue
+        variants.append(slot)
+        runs += slot.get("ok_runs", 0)
+    if len(variants) < 3:
+        return None
+    return {"variants": len(variants), "runs": runs,
+            "note": f"同一段脚本你在 {host} 上跑过 {len(variants)} 个版本（共 {runs} 次），"
+                    "彼此只有写死的字符串不同——这说明它想成为一个带参数的能力。"
+                    "把变化的部分改成 args.xxx，然后 web_save_capability 存下来，"
+                    "下次直接调用就行。自动沉淀不会替你做这件事：它没法猜出哪几处该变成参数。"}
+
+
 def first_exec_of_session(host: str) -> bool:
     """Is this the first script of a new session on this host?
 
