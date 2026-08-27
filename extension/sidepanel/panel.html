@@ -69,6 +69,16 @@
     </div>
     <div id="script-list" class="list"></div>
     <p id="script-empty" class="empty" hidden></p>
+
+    <!-- Reuse was something the user had to take on faith: the tool list shows
+         "used N times" but never when, or what happened instead. This is the
+         timeline — a capability call and a hand-written script look different
+         at a glance, so you can watch which one the agent reached for. -->
+    <div class="feed-head">
+      <span>最近动作</span>
+      <button id="feed-refresh" class="mini ghost" title="刷新">⟳</button>
+    </div>
+    <div id="feed" class="feed"></div>
   </section>
 
   <!-- ================= 页面：用户自己的脚本 ================= -->

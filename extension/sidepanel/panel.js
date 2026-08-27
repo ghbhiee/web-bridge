@@ -650,10 +650,12 @@ $("ctx-drop").addEventListener("click", () => { state.context = null; $("ctx-chi
 async function loadScripts() {
   const url = state.filterSite ? state.tab?.url || "" : "";
   try {
-    const data = await api("/capabilities" + (url ? "?url=" + encodeURIComponent(url) : ""));
+    // ui=1: this is the panel drawing itself. Without it the panel's own fetches
+    // were journalled as agent activity and showed up in its own feed.
+    const data = await api("/capabilities?ui=1" + (url ? "&url=" + encodeURIComponent(url) : ""));
     state.caps = data.capabilities || [];
     try {
-      const j = await api("/journal?limit=100" + (url ? "&host=" + encodeURIComponent(hostOf(state.tab?.url)) : ""));
+      const j = await api("/journal?ui=1&limit=100" + (url ? "&host=" + encodeURIComponent(hostOf(state.tab?.url)) : ""));
       state.usage = {};
       for (const m of j.matches || []) {
         const id = m.capability || m.promoted_to;
@@ -662,6 +664,7 @@ async function loadScripts() {
     } catch { state.usage = {}; }
     renderScripts();
     loadToolStats();
+    loadFeed();
   } catch (e) {
     $("script-list").innerHTML = "";
     $("script-empty").hidden = false;
@@ -687,6 +690,45 @@ async function loadToolStats() {
       (top ? `<br>用得最多：${top}` : "<br>这段时间没有工具被调用过——存下来的东西没派上用场。");
     box.hidden = false;
   } catch { box.hidden = true; }
+}
+
+// A capability call and a hand-written script have to be told apart at a
+// glance — that is the whole point of showing this.
+const FEED_LABEL = {
+  capability: ["✅", "调用能力"],
+  exec: ["✍️", "现写 JS"],
+  "user-script": ["▶️", "运行页面脚本"],
+  discover: ["🧭", "查看有哪些能力"],
+  "journal-read": ["🔎", "翻历史记录"],
+};
+
+async function loadFeed() {
+  const box = $("feed");
+  if (!box) return;
+  try {
+    const d = await api("/journal/recent?limit=25");
+    const ev = d.events || [];
+    if (!ev.length) { box.innerHTML = '<p class="empty">还没有动作。</p>'; return; }
+    box.innerHTML = ev.map((e) => {
+      const [icon, label] = FEED_LABEL[e.kind] || ["·", e.kind || ""];
+      const what = e.capability
+        ? esc(e.capability)
+        : e.kind === "discover"
+          ? `本页 ${e.offered ?? "?"} 个可用`
+          : e.kind === "journal-read"
+            ? `命中 ${e.matches ?? 0} 条`
+            : esc(e.summary || "");
+      const bad = e.ok === false ? ' <span class="feed-bad">失败</span>' : "";
+      const ms = e.ms != null ? ` · ${e.ms}ms` : "";
+      return `<div class="feed-row ${e.kind === "capability" ? "hit" : ""}">
+        <span class="feed-t">${esc((e.t || "").slice(11, 16))}</span>
+        <span class="feed-k">${icon} ${esc(label)}</span>
+        <span class="feed-w">${what}${bad}${ms}</span>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    box.innerHTML = '<p class="empty">读不到动作记录：' + esc(e.message) + "</p>";
+  }
 }
 
 function visibleCaps() {
@@ -1146,6 +1188,8 @@ async function loadAgents() {
     addMsg("err", "本地 bridge 没在运行，对话不可用。\n终端里跑：python3 ~/cc/web-bridge/bridge/cli.py service status");
   }
 }
+
+$("feed-refresh")?.addEventListener("click", loadFeed);
 
 $("refresh").addEventListener("click", async () => {
   await refreshHeader();

@@ -642,7 +642,7 @@ async def close_tab(req: CloseReq):
 # capabilities — the discoverable script library
 # --------------------------------------------------------------------------- #
 @app.get("/capabilities", dependencies=[Depends(require_token)])
-async def list_capabilities(url: str = "", site: str = ""):
+async def list_capabilities(url: str = "", site: str = "", ui: bool = False):
     """What can be done on this page. Pass ?url= (or ?site=) to filter; omit for all."""
     if site and not url:
         s = config.SITES.get(site) or {}
@@ -661,7 +661,7 @@ async def list_capabilities(url: str = "", site: str = ""):
     # Discovery is the moment to say "this has been done here before". Putting it
     # here rather than in prose means an agent that never read the skill still
     # finds the trodden path, without having to know the journal exists.
-    if url:
+    if url and not ui:
         journal.record_discovery(url, len(caps),
                                  sum(1 for c in caps if c.get("match") != ["*"]))
     prior = journal.search(host=journal.host_of(url), limit=5) if url else []
@@ -1048,12 +1048,26 @@ async def journal_stats(days: int = 7, host: str = ""):
     return {"ok": True, **journal.usage_stats(days, host)}
 
 
+@app.get("/journal/recent", dependencies=[Depends(require_token)])
+async def journal_recent(limit: int = 25, host: str = ""):
+    """A timeline of what just happened — capability calls and hand-written JS
+    interleaved. The panel shows this so reuse is something a user can watch
+    rather than take on faith."""
+    return {"ok": True, "events": journal.recent(limit, host)}
+
+
 @app.get("/journal", dependencies=[Depends(require_token)])
-async def journal_search(q: str = "", host: str = "", limit: int = 10, all: bool = False):
+async def journal_search(q: str = "", host: str = "", limit: int = 10, all: bool = False,
+                         ui: bool = False):
     """What has already been run here. The point of the journal is that the next
     agent looks this up *before* writing JS from scratch."""
     matches = journal.search(q, host, limit, only_ok=not all)
-    journal.record_journal_read(q, host, len(matches))
+    # `ui=1` means the panel is drawing itself, not an agent looking something
+    # up. Recording those inflated `journal_reads`, and worse, filled the
+    # activity feed with the feed's own fetches — opening the panel polluted the
+    # data it was there to show.
+    if not ui:
+        journal.record_journal_read(q, host, len(matches))
     return {"ok": True, "stats": journal.stats(), "matches": matches}
 
 

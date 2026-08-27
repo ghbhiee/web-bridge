@@ -351,6 +351,25 @@ def acts_outward(code: str) -> bool:
     return bool(OUTWARD_CALL.search(code) or OUTWARD_FETCH.search(code))
 
 
+def _auto_title(slot: dict) -> str:
+    """A name a person can pick out of a list.
+
+    summarise() falls back to the normalised source when a script carries no
+    `// what this does` comment, and the result — `🤖 const
+    items=document.querySelectorAll(7a31c3c3);const mails=Array.from(...` — does
+    not read as a tool at all. The user could not find their own promoted
+    capability in the panel because of it. When there is no comment to use, name
+    it after where it runs and let the description carry the code.
+    """
+    summary = (slot.get("summary") or "").strip()
+    looks_like_code = (not summary) or any(
+        tok in summary for tok in ("document.", "=>", "querySelector", "function(", "await ", "return "))
+    if looks_like_code:
+        host = slot.get("host") or "这个站点"
+        return f"🧪 {host} · 自动沉淀的脚本"
+    return "🧪 " + summary[:80]
+
+
 def maybe_promote(slot: dict, provisional: bool = False) -> Optional[str]:
     """Write a script into the library. Deliberately automatic: relying on an
     agent to remember `save_capability` is exactly why the library never grew on
@@ -381,7 +400,7 @@ def maybe_promote(slot: dict, provisional: bool = False) -> Optional[str]:
         return cap_id
     meta = {
         "id": cap_id,
-        "title": ("🧪 " if provisional else "🤖 ") + (slot.get("summary") or "自动沉淀的脚本"),
+        "title": _auto_title(slot),
         "description": (f"自动沉淀：这段脚本在 {slot['host']} 上成功运行了 {slot['ok_runs']} 次，"
                         f"由 web-bridge 从 exec 日志里自动存成能力（首次 {slot['first']}）。"
                         f"标题和参数说明是机器生成的，确认有用就用 save_capability 覆盖同名文件、写好描述。"),
@@ -459,6 +478,39 @@ def record_journal_read(query: str, host: str, matches: int) -> None:
              "host": host or "?", "url": "", "ok": True,
              "query": (query or "")[:120], "matches": matches}
     _append(entry)
+
+
+def recent(limit: int = 25, host: str = "") -> list[dict]:
+    """The last N things that happened, newest first — a feed, not an aggregate.
+
+    search() groups by signature and sorts by repeat count, which answers "what
+    works here" but cannot answer "did it just use my tool or write its own
+    again". Watching reuse happen needs a timeline.
+    """
+    rows: list[dict] = []
+    try:
+        with LOG_PATH.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                if host and host.lower() not in (r.get("host") or "").lower():
+                    continue
+                rows.append({
+                    "t": r.get("t"), "kind": r.get("kind"), "host": r.get("host"),
+                    "capability": r.get("capability"), "ok": r.get("ok"),
+                    "ms": r.get("ms"), "sig": r.get("sig"),
+                    # enough to recognise a script, never the whole body
+                    "summary": (r.get("summary") or "")[:70],
+                    "matches": r.get("matches"), "offered": r.get("offered"),
+                })
+    except OSError:
+        return []
+    return rows[-limit:][::-1]
 
 
 def usage_stats(days: int = 7, host: str = "") -> dict:

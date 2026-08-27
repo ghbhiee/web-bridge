@@ -472,6 +472,20 @@ async def main():
                     and _ts0.VECTOR_INDEX_NAME.startswith("web-bridge")
                     and (".cache" in str(vec) or "Local" in str(vec))))
 
+    # The panel draws itself by calling the same endpoints an agent uses. Until
+    # `ui=1`, doing so was journalled as agent activity: journal_reads and
+    # discoveries were inflated, and the activity feed filled with its own
+    # fetches — opening the panel polluted the data it existed to show.
+    _before = len(_j6.recent(limit=500))
+    code_ui, _ = await asyncio.to_thread(http, "GET", "/capabilities?ui=1")
+    code_ui2, _ = await asyncio.to_thread(http, "GET", "/journal?ui=1&limit=5")
+    _quiet = len(_j6.recent(limit=500)) == _before
+    code_ag, _ = await asyncio.to_thread(http, "GET", "/journal?limit=5")
+    _loud = len(_j6.recent(limit=500)) > _before
+    results.append(("journal.panel_reads_are_not_agent_activity",
+                    code_ui == 200 and code_ui2 == 200 and code_ag == 200
+                    and _quiet and _loud))
+
     # A session tail is a guess about which script mattered -- replaying the
     # rule over this journal promoted 17 tails of which about 7 were real. So it
     # must be findable by search, where a wrong guess simply never ranks, and
