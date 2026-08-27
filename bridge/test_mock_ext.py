@@ -459,6 +459,25 @@ async def main():
                     and _ts0.VECTOR_INDEX_NAME.startswith("web-bridge")
                     and (".cache" in str(vec) or "Local" in str(vec))))
 
+    # index.yml is shared ground: kb.py adds an `ignore:` block and qmd itself
+    # back-fills a `generate:` model line, so a writer that rewrites on any
+    # difference would strip them on every rebuild while the other side puts them
+    # back. It must leave a config that still points at us alone, and still
+    # repair one that does not.
+    import tempfile as _tf, pathlib as _plib
+    with _tf.TemporaryDirectory() as _d:
+        _home = _plib.Path(_d)
+        _docs = _home / "docs"
+        _ts0._write_qmd_config(_home, _docs)
+        _cfg = _home / "index.yml"
+        _cfg.write_text(_cfg.read_text() + "    ignore:\n      - AGENTS.md\n", encoding="utf-8")
+        _ts0._write_qmd_config(_home, _docs)
+        _kept = "AGENTS.md" in _cfg.read_text()
+        _cfg.write_text(_cfg.read_text().replace(str(_docs), "/wrong/path"), encoding="utf-8")
+        _ts0._write_qmd_config(_home, _docs)
+        _repaired = "/wrong/path" not in _cfg.read_text() and str(_docs) in _cfg.read_text()
+    results.append(("toolsearch.qmd_config_shared_not_clobbered", _kept and _repaired))
+
     # Query expansion is the one model neither project wants: 1.2GB, and only
     # ever used by `qmd query`, which is never called here.
     results.append(("toolsearch.no_query_expansion_model",

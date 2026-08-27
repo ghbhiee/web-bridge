@@ -298,8 +298,14 @@ payload 验证过：变成可见文本，不执行。
   **单一 cache 根 `llm-wiki`，不分 owner 层，`<name>` 全局唯一并自带项目前缀**。
   不分层是有意的——多一层会让「名字唯一」这条约束变模糊，而 collection 撞名
   在 qmd 里恰恰是**静默失败**（悄悄落回全库搜索，不报错）。
-  代码不依赖 llm-wiki 的 `kb.py`，qmd 调用是自足的，所以没装 llm-wiki 的机器照样能跑；
-  装了的话 `kb.py` 能直接管这个索引（`kb.py search "..." --kb web-bridge-tools --fast`）。
+  代码不依赖 llm-wiki 的 `kb.py`，qmd 调用是自足的，所以没装 llm-wiki 的机器照样能跑。
+  **`kb.py` 默认管不了这个索引**（实测：`kb.py status --kb web-bridge-tools` 报「找不到库」，
+  因为它只认自己注册表 `~/.config/llm-wiki/libraries.json` 里的库）。想让它管得先注册：
+  `python3 ~/.claude/skills/llm-wiki/scripts/kb.py index ~/.cache/llm-wiki/web-bridge-tools/docs --name web-bridge-tools`。
+  没注册也完全不影响 web-bridge 自己用。
+  两边布局实测兼容（同一份 embed/rerank 模型、同样的 collection 结构），差别只是 kb.py 会多写
+  `kb.json` 和一个 `ignore:` 块——所以 `_write_qmd_config` 改成了**只在配置不再指向我们时才重写**，
+  不再无条件覆盖，否则每次重建都会抹掉对方写的东西、对方再加回来。
   `index.yml` 里显式写 embed/rerank 模型（和 llm-wiki 用同一对，共用一份模型下载）。
   **不要声明 `generate`**（1.2GB 查询扩展模型，只有 `qmd query` 会用，本项目从不调用）——
   注意 qmd 会在每次 `update` 时把这行**自动回填**进 `index.yml`，所以删模型文件是留不住的，

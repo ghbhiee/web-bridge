@@ -256,7 +256,20 @@ def _write_qmd_config(index_home: "pathlib.Path", docs: "pathlib.Path") -> None:
         "models:\n"
         + "".join(f"  {k}: {v}\n" for k, v in QMD_MODELS.items())
     )
-    if not cfg.exists() or cfg.read_text(encoding="utf-8") != body:
+    if not cfg.exists():
+        cfg.write_text(body, encoding="utf-8")
+        return
+    # Do not clobber a config that already points where we need it. This file is
+    # shared ground: llm-wiki's kb.py writes the same layout here plus an
+    # `ignore:` block, and qmd itself back-fills a `generate:` model line on
+    # every update. Rewriting on any difference would strip both on each rebuild
+    # and have the other side put them back — two owners fighting over one file.
+    # So only rewrite when the config no longer describes our collection.
+    current = cfg.read_text(encoding="utf-8")
+    intact = (f"  {VECTOR_INDEX_NAME}:" in current
+              and f"path: {docs}" in current
+              and all(v in current for v in QMD_MODELS.values()))
+    if not intact:
         cfg.write_text(body, encoding="utf-8")
 
 
