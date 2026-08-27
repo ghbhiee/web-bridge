@@ -131,15 +131,38 @@ def cache_dir() -> "pathlib.Path":
     return (_pl.Path(base) if base else _pl.Path.home() / ".cache") / "web-bridge"
 
 
+# Shared with llm-wiki, which owns this convention: one cache root, no per-owner
+# level, and a globally unique <name> that carries its own project prefix. The
+# flat root is the point — a nested layout would blur uniqueness, and colliding
+# names are exactly what fails silently in qmd.
+VECTOR_INDEX_NAME = "web-bridge-tools"
+
+
+def vector_home() -> "pathlib.Path":
+    """`<cache>/llm-wiki/web-bridge-tools/` — index.sqlite, index.yml, docs/.
+
+    Sharing the root lets llm-wiki's kb.py manage this index too, without
+    web-bridge having to depend on it: the qmd calls here stay self-contained so
+    a checkout works on a machine that has never heard of llm-wiki.
+    """
+    import pathlib as _pl
+    if os.name == "nt":
+        base = _pl.Path(os.environ.get("LOCALAPPDATA") or (_pl.Path.home() / "AppData/Local"))
+    else:
+        xdg = os.environ.get("XDG_CACHE_HOME")
+        base = _pl.Path(xdg) if xdg else _pl.Path.home() / ".cache"
+    return base / "llm-wiki" / VECTOR_INDEX_NAME
+
+
 def qmd_available() -> bool:
     """qmd is used when installed — it is on Windows too, so it is not mac-only.
 
-    Opt out with WEB_BRIDGE_QMD=0. Only the BM25 path (`qmd search`) runs here:
-    `vsearch`/`query` go through a local embedding model, which on this machine
-    hangs outright (node-llama-cpp fails to build its Metal shaders) and even
-    healthy costs seconds. Tool lookup sits in the hot path — briefing
-    construction, exec hints, every agent question — so it must stay in
-    milliseconds. Set WEB_BRIDGE_QMD_VECTOR=1 to try the vector path anyway.
+    Opt out with WEB_BRIDGE_QMD=0. Only the BM25 path (`qmd search`) runs by
+    default: `vsearch` loads a local embedding model and costs seconds even when
+    everything is healthy, and tool lookup sits in the hot path — briefing
+    construction, exec hints, every agent question — so it has to stay in
+    milliseconds. Set WEB_BRIDGE_QMD_VECTOR=1 to spend that time on the vector
+    path (measured ~2.6-3.4s cold, GPU, reranking off).
     """
     if os.environ.get("WEB_BRIDGE_QMD") == "0":
         return False
@@ -165,7 +188,7 @@ def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
             # reranking is a second model load for a fourteen-document corpus
             cmd.append("--no-rerank")
         # Hard timeout: a hanging search binary must never hold up a tool lookup.
-        env = _qmd_env(cache_dir() / "qmd")
+        env = _qmd_env(vector_home())
         timeout = 30 if vector else 6
         out = subprocess.run(cmd, cwd=index_dir, env=env,
                              capture_output=True, text=True, timeout=timeout)
@@ -190,11 +213,12 @@ def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
         return {}
 
 
-# The models that work on this machine, copied from the llm-wiki setup rather
-# than guessed. Without a models block qmd falls back to a default the local
-# runtime cannot build (node-llama-cpp fails to compile its Metal shaders) and
-# vsearch hangs — which is exactly why the vector path looked broken while
-# llm-wiki's worked fine.
+# Pinned to the same pair llm-wiki settled on rather than guessed, so both
+# indexes share one model download. No `generate` entry on purpose: query
+# expansion needs a separate 1.2GB model and only ever runs for `qmd query`,
+# which this module never calls. qmd back-fills a `generate:` line into index.yml
+# on every `update` regardless, so deleting the model file does not keep it away
+# — not calling `qmd query` is what does.
 QMD_MODELS = {
     "embed": "hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf",
     "rerank": "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf",
@@ -212,13 +236,13 @@ def _qmd_env(index_home: "pathlib.Path") -> dict:
     env = dict(os.environ)
     env["INDEX_PATH"] = str(index_home / "index.sqlite")
     env["QMD_CONFIG_DIR"] = str(index_home)
-    # Force CPU inference. The GPU path needs node-llama-cpp to compile Metal
-    # shaders, and this machine has no Metal Toolchain — `xcrun metal` refuses,
-    # the shader build fails, and the search then hangs forever instead of
-    # erroring. On CPU the same query answers in about five seconds, with no
-    # rebuild of anything. (Downloading the toolchain would also fix it; this
-    # does not require it.)
-    env.setdefault("QMD_FORCE_CPU", "1")
+    # Deliberately NOT setting QMD_FORCE_CPU. node-llama-cpp prints
+    # `ggml_metal_library_init_from_source: error compiling source` when no Metal
+    # Toolchain is installed, but that is only its first strategy failing: it then
+    # loads the bundled prebuilt default.metallib and runs on the GPU normally.
+    # `qmd doctor` confirms the GPU is live. Forcing CPU off the back of that
+    # error line makes queries about twice as slow (measured, --no-rerank path:
+    # 2.6-3.4s on GPU vs 4.5-6.1s on CPU).
     return env
 
 
@@ -226,7 +250,7 @@ def _write_qmd_config(index_home: "pathlib.Path", docs: "pathlib.Path") -> None:
     cfg = index_home / "index.yml"
     body = (
         "collections:\n"
-        "  web-bridge-tools:\n"
+        f"  {VECTOR_INDEX_NAME}:\n"
         f"    path: {docs}\n"
         '    pattern: "**/*.md"\n'
         "models:\n"
@@ -243,7 +267,7 @@ def _qmd_index(caps: list[dict]) -> str:
     then — `qmd update` on every query would put a subprocess in the hot path
     for nothing.
     """
-    base = cache_dir() / "web-bridge-tools"
+    base = vector_home() / "docs"
     base.mkdir(parents=True, exist_ok=True)
     seen, changed = set(), False
     for c in caps:
@@ -260,7 +284,7 @@ def _qmd_index(caps: list[dict]) -> str:
             stale.unlink(missing_ok=True)
             changed = True
 
-    home = cache_dir() / "qmd"
+    home = vector_home()
     home.mkdir(parents=True, exist_ok=True)
     _write_qmd_config(home, base)
 

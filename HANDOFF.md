@@ -275,23 +275,35 @@ payload 验证过：变成可见文本，不执行。
 
 **qmd 集成：接好了，但实测在这个语料上贡献为零**（qmd 装了就用，`WEB_BRIDGE_QMD=0` 关掉）：
 - `qmd search`（BM25，0.13s）：开关它，10 条查询的排序**一模一样**
-- `qmd vsearch`（向量）：**能用了，靠 `QMD_FORCE_CPU=1`，不用重编译任何东西**。
-  GPU 路径要 node-llama-cpp 现场编译 Metal shader，而这台机器缺 Metal Toolchain
-  （`xcrun metal` 直接拒绝），编译失败后**无限等待而不是报错**。强制 CPU 推理绕开整个
-  shader 编译，同样的查询 ~5s 出结果（加 `--no-rerank` 省掉第二次模型加载）。
-  代码里 `_qmd_env()` 默认设了这个变量。
-  **副作用：llm-wiki 的向量检索也一起恢复了**（实测 ob 库 1.3s / 17 条命中）——
-  它之前卡的是同一个原因，`kb.py` 里也该加上 `QMD_FORCE_CPU=1`。
-  （另一条路是 `xcodebuild -downloadComponent MetalToolchain` 把工具链装回来，
-  但那要能连上苹果的资产服务器，而且不是必须的。）
-- 历史记录：这台机器上向量曾经完全不可用——
-  `xcrun metal` 报 `missing Metal Toolchain`，node-llama-cpp 编译不出 shader，
-  于是 `ggml_metal_library_init_from_source: error compiling source` 后无限等待。
-  **llm-wiki 自己的 ob 库现在也一样卡**，同一个报错，所以这是机器层面的
-  （`xcodebuild -downloadComponent MetalToolchain` 可修，需要能连上苹果的资产服务器）。
-  向量路径默认不走，要试设 `WEB_BRIDGE_QMD_VECTOR=1`；所有 qmd 调用都有硬超时。
-- 索引隔离：`INDEX_PATH` + `QMD_CONFIG_DIR` 指向 `~/.cache/web-bridge/qmd/`，
-  `index.yml` 里显式写 embed/rerank 模型（照抄 llm-wiki 里能用的那套）。
+- `qmd vsearch`（向量）：能用，走 GPU，**不要设 `QMD_FORCE_CPU`**。
+  首次查询 ~12.8s（加载嵌入模型），之后 ~2.6-3.4s；代码默认关着这条路，
+  要试设 `WEB_BRIDGE_QMD_VECTOR=1`。所有 qmd 调用都有硬超时。
+- **纠正一条曾经写在这里的错误结论**（原文说「缺 Metal Toolchain 导致向量卡死，
+  要靠 `QMD_FORCE_CPU=1` 绕开」，那是错的，代码里的默认值已删）：
+  - `ggml_metal_library_init_from_source: error compiling source` **是噪声，不是故障**。
+    llama.cpp 先试着从源码现场编译 Metal kernel（需要 Metal Toolchain，本机没有 → 打印这行），
+    失败后回退到 node-llama-cpp 自带的预编译 `default.metallib` → 成功。
+    权威判据是 `qmd doctor`，它会明说 `device probe: GPU metal ... offloading enabled`。
+  - 强制 CPU **更慢**。实测（本项目 14 条能力的索引，`--no-rerank` 路径，即代码实际走的路径）：
+    GPU 2.6-3.4s vs CPU 4.5-6.1s。llm-wiki 在更大的 ob 库上测得差距更大（重排 16.3s vs 61.9s）。
+  - 我当初测出的「5.7s」是 `--no-rerank` 的功劳，不是 CPU 的——**两个变量一起改，没有分开测**。
+    要快就 `--no-rerank`（llm-wiki 的 `kb.py` 里是 `--fast`），别切 CPU。
+  - 测性能前必须先 `qmd cleanup`：qmd 的 `llm_cache` 会缓存重排结果，命中时打印
+    `Reranking N chunks... (0ms)`，于是第二次跑必然「飞快」，很容易得出反向结论。
+  - 另一个坑：**语料越小，GPU 越吃亏**。开着重排时，本项目这种 14 条的索引上 CPU 反而快
+    （4.5s vs 12.7s），因为 GPU 的模型加载成本摊不掉。但代码不走重排，所以结论仍是用 GPU。
+- 索引位置：`INDEX_PATH` + `QMD_CONFIG_DIR` 指向
+  **`~/.cache/llm-wiki/web-bridge-tools/`**（Windows 是 `%LOCALAPPDATA%\llm-wiki\...`），
+  里面是 `index.sqlite` / `index.yml` / `docs/`。这是和 llm-wiki 商定的统一规范：
+  **单一 cache 根 `llm-wiki`，不分 owner 层，`<name>` 全局唯一并自带项目前缀**。
+  不分层是有意的——多一层会让「名字唯一」这条约束变模糊，而 collection 撞名
+  在 qmd 里恰恰是**静默失败**（悄悄落回全库搜索，不报错）。
+  代码不依赖 llm-wiki 的 `kb.py`，qmd 调用是自足的，所以没装 llm-wiki 的机器照样能跑；
+  装了的话 `kb.py` 能直接管这个索引（`kb.py search "..." --kb web-bridge-tools --fast`）。
+  `index.yml` 里显式写 embed/rerank 模型（和 llm-wiki 用同一对，共用一份模型下载）。
+  **不要声明 `generate`**（1.2GB 查询扩展模型，只有 `qmd query` 会用，本项目从不调用）——
+  注意 qmd 会在每次 `update` 时把这行**自动回填**进 `index.yml`，所以删模型文件是留不住的，
+  真正让它不被下载的是「不调用 `qmd query`」。
   **之前用全局索引是我的错**：全局索引没有 models 配置，而且里面那个根在仓库目录的
   collection 让 HANDOFF.md 混进了搜索结果。`qmd embed` 在隔离索引上是能跑的（14/14 已嵌入）。
 

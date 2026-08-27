@@ -445,6 +445,33 @@ async def main():
     results.append(("toolsearch.index_lives_in_cache",
                     (".cache" in cache or "Local" in cache) and "config" not in cache))
 
+    # The vector index follows the convention llm-wiki owns, so both tools can
+    # point at one index instead of each building their own: a single cache root
+    # named `llm-wiki`, no per-owner level, and a globally unique <name> that
+    # carries its own project prefix. Asserted rather than assumed — the check
+    # above passes whatever the vector path does, because it tests a different
+    # directory.
+    vec = _ts0.vector_home()
+    parts = vec.parts
+    results.append(("toolsearch.vector_index_follows_shared_convention",
+                    parts[-2] == "llm-wiki"
+                    and parts[-1] == _ts0.VECTOR_INDEX_NAME
+                    and _ts0.VECTOR_INDEX_NAME.startswith("web-bridge")
+                    and (".cache" in str(vec) or "Local" in str(vec))))
+
+    # Query expansion is the one model neither project wants: 1.2GB, and only
+    # ever used by `qmd query`, which is never called here.
+    results.append(("toolsearch.no_query_expansion_model",
+                    "generate" not in _ts0.QMD_MODELS))
+
+    # A GPU that reports healthy must not be forced onto the CPU: node-llama-cpp
+    # logs a shader-compile error and then falls back to its prebuilt metallib,
+    # so that error line is not evidence of a broken GPU. Forcing CPU on the
+    # strength of it measured ~2x slower.
+    _env_probe = _ts0._qmd_env(vec)
+    results.append(("toolsearch.does_not_force_cpu",
+                    _env_probe.get("QMD_FORCE_CPU") is None))
+
     # Below a size budget the whole library is handed over instead of being
     # filtered: the model matches "把网页数据弄成 excel" to extract-tables better
     # than a synonym table does, and cannot match what it was never shown.
