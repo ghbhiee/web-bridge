@@ -468,6 +468,17 @@ def usage_stats(days: int = 7, host: str = "") -> dict:
     cap = by_kind.get("capability", 0)
     adhoc = by_kind.get("exec", 0)
     total = cap + adhoc
+    # Reuse turned out not to look like "the same script ran again". Measured
+    # 2026-08-27: an agent that read the journal first wrote 4 scripts and got it
+    # right first try, where two agents that did not wrote 16 and 10 on the same
+    # kind of task -- and none of the three shared a single signature. What it
+    # took from the journal was the endpoint and the payload shape, then it wrote
+    # its own code. So the number that matters is not signature repeats but
+    # whether prior work was read at all, and how many scripts a session then
+    # needed. Counting repeats alone reports this as zero reuse.
+    reads = by_kind.get("journal-read", 0)
+    discoveries = by_kind.get("discover", 0)
+    looked = reads + discoveries
     # Sites where JS keeps getting written and no capability exists are a supply
     # problem (nothing to hit); sites with capabilities that still get ad-hoc JS
     # are a targeting problem. They need opposite fixes, so name them apart.
@@ -511,7 +522,12 @@ def usage_stats(days: int = 7, host: str = "") -> dict:
         "days": days,
         "capability_runs": cap,
         "adhoc_execs": adhoc,
-        "discoveries": by_kind.get("discover", 0),
+        "discoveries": discoveries,
+        "journal_reads": reads,
+        # Reuse of knowledge, not of code: whether a session consulted prior work
+        # before writing. The measured effect is on how many scripts it then
+        # needs, not on whether any of them repeat.
+        "consulted_prior": looked,
         # sites doing ad-hoc work: with no tool = nothing to hit, with a tool =
         # the tool is not being reached for
         "gaps": gaps[:6],
