@@ -353,6 +353,20 @@ def record_discovery(url: str, offered: int, site_specific: int) -> None:
     _append(entry)
 
 
+def record_journal_read(query: str, host: str, matches: int) -> None:
+    """Note that someone searched the journal before writing JS.
+
+    Same reason `discover` is recorded: without it, "the agent looked at what
+    ran here before and wrote its own anyway" and "the agent never looked" are
+    indistinguishable, and they need opposite fixes. The skill tells agents to
+    check here first; this is how we find out whether they do.
+    """
+    entry = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": "journal-read",
+             "host": host or "?", "url": "", "ok": True,
+             "query": (query or "")[:120], "matches": matches}
+    _append(entry)
+
+
 def usage_stats(days: int = 7, host: str = "") -> dict:
     """Are the saved tools actually being used, or is everything hand-written?
 

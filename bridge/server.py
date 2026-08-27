@@ -35,7 +35,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import uvicorn
 
 import config
@@ -493,7 +493,21 @@ def _tools_for_host_hint(url: str) -> Optional[dict]:
     }
 
 
-class ExecReq(BaseModel):
+class StrictReq(BaseModel):
+    """Reject unknown fields instead of ignoring them.
+
+    Pydantic drops extras by default, so `{"args": {...}}` sent to an endpoint
+    whose field is `params` returned 200 and a capability complaining that its
+    argument was missing — the caller is told the call failed for the wrong
+    reason, and the real mistake (a wrong field name) is invisible. Costing two
+    rounds of debugging to find is what this prevents; agents guessing field
+    names is the normal case here, not the exception.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ExecReq(StrictReq):
     code: str                              # function body; `args` is in scope, may `return`
     args: Any = None
     site: Optional[str] = None             # named site from config (picks a matching tab)
@@ -569,7 +583,7 @@ async def exec_js(req: ExecReq):
     return JSONResponse(payload)
 
 
-class AdapterReq(BaseModel):
+class AdapterReq(StrictReq):
     params: dict = {}
     new_tab: bool = False
     timeout_ms: int = 300000
@@ -597,7 +611,7 @@ async def tabs(filter: str = ""):
     return JSONResponse({"ok": True, **data})
 
 
-class OpenReq(BaseModel):
+class OpenReq(StrictReq):
     url: str
     activate: bool = True
     reuse: bool = True
@@ -609,7 +623,7 @@ async def open_tab(req: OpenReq):
     return JSONResponse({"ok": True, **data})
 
 
-class CloseReq(BaseModel):
+class CloseReq(StrictReq):
     url: Optional[str] = None      # substring of the tab URL
     tab_id: Optional[int] = None   # or an exact tab id from /tabs
 
@@ -665,11 +679,16 @@ async def get_capability(cap_id: str):
             "params_help": capabilities.params_help(cap), "source": cap["body"]}
 
 
-class RunCapReq(BaseModel):
+class RunCapReq(StrictReq):
     params: dict = {}
     site: Optional[str] = None
     url: Optional[str] = None
     new_tab: bool = False
+    activate: bool = True                  # /exec has always had this; running a
+                                           # capability without stealing focus is
+                                           # just as reasonable, and the field was
+                                           # silently dropped until extra="forbid"
+                                           # surfaced callers that were sending it
     timeout_ms: int = 120000
     queue_wait_ms: int = 20000             # same fail-fast knob as /exec: how long
                                            # to queue behind another command on
@@ -698,6 +717,7 @@ async def run_capability(cap_id: str, req: RunCapReq):
         "site": req.site,
         "url": req.url,
         "new_tab": req.new_tab,
+        "activate": req.activate,
         "timeout_ms": req.timeout_ms,
         "capability": cap_id,
         **_site_fields(req.site),
@@ -737,11 +757,11 @@ async def autorun_list():
 # --------------------------------------------------------------------------- #
 # user scripts — the user's own page JS, kept apart from agent capabilities
 # --------------------------------------------------------------------------- #
-class AutorunReq(BaseModel):
+class AutorunReq(StrictReq):
     autorun: bool
 
 
-class UserScriptReq(BaseModel):
+class UserScriptReq(StrictReq):
     code: str
     by: Optional[str] = None               # which agent wrote it, for the list
     # None means "leave whatever is stored" — an update from the chat sends only
@@ -787,7 +807,7 @@ async def user_script_autorun(script_id: str, req: AutorunReq):
     return {"ok": True, "script": rec}
 
 
-class ImportReq(BaseModel):
+class ImportReq(StrictReq):
     data: dict
     overwrite: bool = False
 
@@ -840,7 +860,7 @@ async def user_script_bookmarklet(script_id: str):
             "html": user_scripts.bookmarklet_page(script)}
 
 
-class RunUserScriptReq(BaseModel):
+class RunUserScriptReq(StrictReq):
     url: Optional[str] = None
     timeout_ms: int = 60000
 
@@ -880,7 +900,7 @@ async def set_autorun(cap_id: str, req: AutorunReq):
     return {"ok": True, "capability": meta}
 
 
-class SaveCapReq(BaseModel):
+class SaveCapReq(StrictReq):
     source: str
     overwrite: bool = True
 
@@ -914,7 +934,7 @@ async def list_agents():
     return {"ok": True, **agents.roster()}
 
 
-class DetectReq(BaseModel):
+class DetectReq(StrictReq):
     cwd: Optional[str] = None
     full_access: bool = True
 
@@ -927,7 +947,7 @@ async def detect_agents(req: DetectReq):
     return {"ok": True, **agents.roster()}
 
 
-class AskReq(BaseModel):
+class AskReq(StrictReq):
     prompt: str
     agent: Optional[str] = None
     cwd: Optional[str] = None
@@ -997,7 +1017,7 @@ async def tools_search(q: str = "", url: str = "", limit: int = 5, generic: bool
             "tools": toolsearch.search(q, url, max(1, min(limit, 10)), generic)}
 
 
-class ToolFeedbackReq(BaseModel):
+class ToolFeedbackReq(StrictReq):
     ok: bool
     note: str = ""
 
@@ -1024,14 +1044,15 @@ async def journal_stats(days: int = 7, host: str = ""):
 async def journal_search(q: str = "", host: str = "", limit: int = 10, all: bool = False):
     """What has already been run here. The point of the journal is that the next
     agent looks this up *before* writing JS from scratch."""
-    return {"ok": True, "stats": journal.stats(),
-            "matches": journal.search(q, host, limit, only_ok=not all)}
+    matches = journal.search(q, host, limit, only_ok=not all)
+    journal.record_journal_read(q, host, len(matches))
+    return {"ok": True, "stats": journal.stats(), "matches": matches}
 
 
 # --------------------------------------------------------------------------- #
 # sites — register a site at runtime (no manifest edit, no extension reload)
 # --------------------------------------------------------------------------- #
-class SiteReq(BaseModel):
+class SiteReq(StrictReq):
     match: list[str]
     home: Optional[str] = None
     adapter: Optional[str] = None
