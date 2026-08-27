@@ -275,23 +275,31 @@ payload 验证过：变成可见文本，不执行。
 
 **qmd 集成：接好了，但实测在这个语料上贡献为零**（qmd 装了就用，`WEB_BRIDGE_QMD=0` 关掉）：
 - `qmd search`（BM25，0.13s）：开关它，10 条查询的排序**一模一样**
-- `qmd vsearch`（向量）：能用，走 GPU，**不要设 `QMD_FORCE_CPU`**。
-  首次查询 ~12.8s（加载嵌入模型），之后 ~2.6-3.4s；代码默认关着这条路，
-  要试设 `WEB_BRIDGE_QMD_VECTOR=1`。所有 qmd 调用都有硬超时。
-- **纠正一条曾经写在这里的错误结论**（原文说「缺 Metal Toolchain 导致向量卡死，
-  要靠 `QMD_FORCE_CPU=1` 绕开」，那是错的，代码里的默认值已删）：
-  - `ggml_metal_library_init_from_source: error compiling source` **是噪声，不是故障**。
-    llama.cpp 先试着从源码现场编译 Metal kernel（需要 Metal Toolchain，本机没有 → 打印这行），
-    失败后回退到 node-llama-cpp 自带的预编译 `default.metallib` → 成功。
-    权威判据是 `qmd doctor`，它会明说 `device probe: GPU metal ... offloading enabled`。
-  - 强制 CPU **更慢**。实测（本项目 14 条能力的索引，`--no-rerank` 路径，即代码实际走的路径）：
-    GPU 2.6-3.4s vs CPU 4.5-6.1s。llm-wiki 在更大的 ob 库上测得差距更大（重排 16.3s vs 61.9s）。
-  - 我当初测出的「5.7s」是 `--no-rerank` 的功劳，不是 CPU 的——**两个变量一起改，没有分开测**。
-    要快就 `--no-rerank`（llm-wiki 的 `kb.py` 里是 `--fast`），别切 CPU。
-  - 测性能前必须先 `qmd cleanup`：qmd 的 `llm_cache` 会缓存重排结果，命中时打印
-    `Reranking N chunks... (0ms)`，于是第二次跑必然「飞快」，很容易得出反向结论。
-  - 另一个坑：**语料越小，GPU 越吃亏**。开着重排时，本项目这种 14 条的索引上 CPU 反而快
-    （4.5s vs 12.7s），因为 GPU 的模型加载成本摊不掉。但代码不走重排，所以结论仍是用 GPU。
+- `qmd vsearch`（向量）：**查询必须写成 `vec: <内容>`，不能传裸句子**。
+  实测 0.9-1.2s（裸句子要 12.8s），代码默认关着这条路，要试设 `WEB_BRIDGE_QMD_VECTOR=1`。
+- **「向量搜索卡死」的真正原因（2026-08-26 定位）：qmd 在偷偷下 1.2GB 模型。**
+  qmd 的查询文法分两种：不带前缀的裸句子是 **expand query**，qmd 会先用一个
+  1.2GB 的查询扩写模型生成额外的 `vec:` / `hyde:` 变体（stderr 里能看到
+  `Searching 4 vector queries...` 和生成出来的变体行）；带 `vec:` / `lex:` / `hyde:`
+  前缀的是**结构化查询文档**，直接跳过扩写。
+  - 这个模型**不是可选的，也不能靠不写 `generate:` 躲掉**——实测把它从 `index.yml` 删掉，
+    qmd 回落到同一个默认模型，照样下载。
+  - 所以在没有这个模型的机器上，**第一次向量搜索会静默等下载 1.2GB，看起来就是卡死**。
+    实测：把模型文件挪走后跑 `vsearch`，>75s 无输出；挪回来后 2.7s 返回。
+  - 改用 `vec:` 前缀后：5 条查询 16.0s → 6.3s，**首位命中 5/5 完全一致**，质量没有代价。
+  - 推论：`qmd vsearch` **根本不重排**（`--help` 写的是 "Vector similarity only"，
+    输出里也从来没有 `Reranking N chunks` 那行），所以给它传 `--no-rerank` 是空操作，已删。
+    我之前那句「5.7s 是 --no-rerank 的功劳」也站不住——真正的变量是有没有走扩写。
+- GPU / CPU：用 GPU，**不要设 `QMD_FORCE_CPU`**。
+  `ggml_metal_library_init_from_source: error compiling source` 是噪声不是故障——
+  llama.cpp 先试着从源码编 Metal kernel（缺 Metal Toolchain → 打印这行），失败后回退到
+  node-llama-cpp 自带的预编译 `default.metallib`，照常用 GPU。权威判据是 `qmd doctor` 的
+  `device probe: GPU metal ... offloading enabled`。llm-wiki 在更大的库上实测强制 CPU
+  慢 3~4 倍（重排 16.3s vs 61.9s）。
+- **基准纪律**（我和 llm-wiki 各栽了一次）：① 测之前先 `qmd cleanup`，否则 `llm_cache`
+  会让第二次跑「飞快」（命中时打印 `Reranking N chunks... (0ms)`）；② 一次只改一个变量——
+  我曾把 `QMD_FORCE_CPU=1` 和 `--no-rerank` 一起上，把功劳记在了错的那个上；
+  ③ 确认没有别的任务在抢 GPU。
 - 索引位置：`INDEX_PATH` + `QMD_CONFIG_DIR` 指向
   **`~/.cache/llm-wiki/web-bridge-tools/`**（Windows 是 `%LOCALAPPDATA%\llm-wiki\...`），
   里面是 `index.sqlite` / `index.yml` / `docs/`。这是和 llm-wiki 商定的统一规范：

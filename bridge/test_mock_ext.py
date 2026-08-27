@@ -459,6 +459,37 @@ async def main():
                     and _ts0.VECTOR_INDEX_NAME.startswith("web-bridge")
                     and (".cache" in str(vec) or "Local" in str(vec))))
 
+    # The vector query must go out as a structured `vec:` document, never a bare
+    # sentence. A bare sentence makes qmd run query expansion through a 1.2GB
+    # model it will silently download on a machine that lacks it -- which is what
+    # a "hang" in vector search actually is. Measured 16.0s -> 6.3s for identical
+    # results, so this is not a micro-optimisation.
+    _seen_cmd = {}
+    def _fake_run(cmd, **kw):
+        _seen_cmd["cmd"] = cmd
+        class _R:
+            returncode = 0
+            stdout = "[]"
+        return _R()
+    _real_run = _ts0.subprocess.run
+    _ts0.subprocess.run = _fake_run
+    _real_index = _ts0._qmd_index
+    _ts0._qmd_index = lambda caps: "/tmp"
+    _prev_env = os.environ.get("WEB_BRIDGE_QMD_VECTOR")
+    os.environ["WEB_BRIDGE_QMD_VECTOR"] = "1"
+    try:
+        _ts0.qmd_scores("把网页数据弄成 excel", _ts0.capabilities.all_caps())
+        _cmd = _seen_cmd.get("cmd") or []
+        _structured = any(isinstance(a, str) and a.startswith("vec: ") for a in _cmd)
+    finally:
+        _ts0.subprocess.run = _real_run
+        _ts0._qmd_index = _real_index
+        if _prev_env is None:
+            os.environ.pop("WEB_BRIDGE_QMD_VECTOR", None)
+        else:
+            os.environ["WEB_BRIDGE_QMD_VECTOR"] = _prev_env
+    results.append(("toolsearch.vector_query_skips_expansion", _structured))
+
     # index.yml is shared ground: kb.py adds an `ignore:` block and qmd itself
     # back-fills a `generate:` model line, so a writer that rewrites on any
     # difference would strip them on every rebuild while the other side puts them

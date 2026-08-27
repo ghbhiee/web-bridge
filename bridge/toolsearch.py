@@ -179,14 +179,23 @@ def qmd_scores(query: str, caps: list[dict]) -> dict[str, float]:
     """
     try:
         index_dir = _qmd_index(caps)
-        # Vector is on by default now that it runs (CPU mode). It costs ~5s, but
-        # only on an explicit query: the hot path (briefing, exec hints) uses the
-        # catalogue and never shells out to qmd at all.
+        # Vector runs only on an explicit query: the hot path (briefing, exec
+        # hints) uses the catalogue and never shells out to qmd at all.
         vector = os.environ.get("WEB_BRIDGE_QMD_VECTOR", "1") != "0"
-        cmd = ["qmd", "vsearch" if vector else "search", query, "--json"]
         if vector:
-            # reranking is a second model load for a fourteen-document corpus
-            cmd.append("--no-rerank")
+            # `vec:` matters more than it looks. A bare sentence is an "expand
+            # query": qmd runs it through a 1.2GB query-expansion model to invent
+            # extra vec:/hyde: variants first. That model is not optional and not
+            # avoidable by leaving `generate:` out of index.yml — qmd falls back
+            # to the same default — so on a machine that does not have it yet,
+            # the first vector search silently downloads 1.2GB and looks hung.
+            # Prefixing the line makes it a structured query document, which
+            # skips expansion entirely: measured 16.0s -> 6.3s over five queries
+            # with identical results (5/5 same top hit).
+            term = "vec: " + " ".join(query.split())
+        else:
+            term = query
+        cmd = ["qmd", "vsearch" if vector else "search", term, "--json"]
         # Hard timeout: a hanging search binary must never hold up a tool lookup.
         env = _qmd_env(vector_home())
         timeout = 30 if vector else 6
